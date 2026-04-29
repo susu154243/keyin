@@ -567,7 +567,6 @@ def sm2_schedule(quality, ease_factor, interval, repetitions):
 
 def get_due_questions(user_id, category_id=None, limit=20):
     """获取到期需要复习的题目"""
-    import sqlite3
     from datetime import datetime
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
@@ -584,14 +583,17 @@ def get_due_questions(user_id, category_id=None, limit=20):
             LIMIT ?
         """, (user_id, category_id, now, limit))
     else:
+        # 注意：subject_id 从分类推导（取该用户第一个科目），不再用 category_id 冒充 subject_id
         cur.execute("""
             SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions
             FROM questions q
             JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
-            WHERE q.subject_id = ? AND q.status = 1 AND rs.next_review <= ?
+            WHERE q.subject_id = (
+                SELECT subject_id FROM categories ORDER BY id LIMIT 1
+            ) AND q.status = 1 AND rs.next_review <= ?
             ORDER BY rs.next_review ASC
             LIMIT ?
-        """, (user_id, category_id or 1, now, limit))
+        """, (user_id, now, limit))
     
     due = [serialize_row(r) for r in cur.fetchall()]
     conn.close()
@@ -612,22 +614,24 @@ def get_new_questions(user_id, category_id=None, limit=5):
             LIMIT ?
         """, (category_id, user_id, limit))
     else:
+        # 注意：subject_id 从分类推导，不再用 category_id 冒充 subject_id
         cur.execute("""
             SELECT q.* FROM questions q
-            WHERE q.subject_id = ? AND q.status = 1
+            WHERE q.subject_id = (
+                SELECT subject_id FROM categories ORDER BY id LIMIT 1
+            ) AND q.status = 1
             AND q.id NOT IN (SELECT question_id FROM review_schedule WHERE user_id = ?)
             ORDER BY q.id
             LIMIT ?
-        """, (category_id or 1, user_id, limit))
+        """, (user_id, limit))
     
     new_qs = [serialize_row(r) for r in cur.fetchall()]
     conn.close()
     return new_qs
 
 
-def get_review_progress(user_id, category_id=None):
+def get_review_progress(user_id, subject_id=None, category_id=None):
     """获取复习进度统计"""
-    import sqlite3
     conn = get_db()
     cur = conn.cursor()
     
@@ -635,9 +639,11 @@ def get_review_progress(user_id, category_id=None):
         cur.execute("""
             SELECT COUNT(*) as total FROM questions WHERE category_id = ? AND status = 1
         """, (category_id,))
-    else:
+    elif subject_id:
         cur.execute("SELECT COUNT(*) as total FROM questions WHERE subject_id = ? AND status = 1",
-                   (category_id or 1,))
+                   (subject_id,))
+    else:
+        cur.execute("SELECT COUNT(*) as total FROM questions WHERE status = 1")
     total = cur.fetchone()[0]
     
     cur.execute("SELECT COUNT(*) as reviewed FROM review_schedule WHERE user_id = ?",
@@ -655,7 +661,6 @@ def get_review_progress(user_id, category_id=None):
 
 def update_review_schedule(user_id, question_id, subject_id, quality):
     """根据评分更新复习计划"""
-    import sqlite3
     from datetime import datetime, timedelta
     
     conn = get_db()
@@ -848,13 +853,178 @@ def get_retention_curve(user_id, subject_id):
             COUNT(*) as total,
             SUM(CASE WHEN rs.ease_factor >= 1.5 THEN 1 ELSE 0 END) as retained
         FROM review_schedule rs
+        JOIN questions q ON q.id = rs.question_id
         JOIN history h ON h.question_id = rs.question_id AND h.user_id = rs.user_id
-        WHERE rs.user_id = ? AND rs.subject_id = ? AND rs.last_review IS NOT NULL
+        WHERE rs.user_id = ? AND q.subject_id = ? AND rs.last_review IS NOT NULL
         GROUP BY days_since
         HAVING total >= 1
         ORDER BY days_since
     """, (now_str, user_id, subject_id))
     
     result = [{'days': r[0], 'total': r[1], 'retained': r[2]} for r in cur.fetchall()]
+    conn.close()
+    return result
+
+
+# ==================== 新增封装函数（供 app.py 使用） ====================
+
+def get_subject_by_id(subject_id):
+    """获取单个科目（含禁用）"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM subjects WHERE id = ?", (subject_id,))
+    result = cur.fetchone()
+    conn.close()
+    return result
+
+
+def get_questions_count(subject_id):
+    """获取科目题目总数"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM questions WHERE subject_id = ? AND status = 1", (subject_id,))
+    result = cur.fetchone()[0]
+    conn.close()
+    return result
+
+
+def get_real_exam_count(subject_id):
+    """获取科目真题数量"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM questions WHERE subject_id = ? AND is_real_exam = 1 AND status = 1", (subject_id,))
+    result = cur.fetchone()[0]
+    conn.close()
+    return result
+
+
+def get_exam_years(subject_id):
+    """获取科目真题年份列表"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT DISTINCT exam_year FROM questions
+        WHERE subject_id = ? AND exam_year IS NOT NULL AND status = 1
+        ORDER BY exam_year DESC
+    """, (subject_id,))
+    result = [r['exam_year'] for r in cur.fetchall()]
+    conn.close()
+    return result
+
+
+def get_user_subject_accuracy(user_id, subject_id):
+    """获取用户在某科目的整体正确率"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) as total,
+               SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END) as correct_count
+        FROM history WHERE user_id = ? AND subject_id = ?
+    """, (user_id, subject_id))
+    row = cur.fetchone()
+    conn.close()
+    if row['total'] > 0:
+        return round(row['correct_count'] / row['total'] * 100, 1)
+    return 0
+
+
+def get_next_question_id(subject_id, current_qid):
+    """获取下一题 ID"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id FROM questions
+        WHERE subject_id = ? AND id > ? AND status = 1
+        ORDER BY id LIMIT 1
+    """, (subject_id, current_qid))
+    row = cur.fetchone()
+    conn.close()
+    return row['id'] if row else None
+
+
+def get_questions_by_year(subject_id, year):
+    """按年份获取真题"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM questions
+        WHERE subject_id = ? AND is_real_exam = 1 AND exam_year = ? AND status = 1
+        ORDER BY id
+    """, (subject_id, year))
+    result = cur.fetchall()
+    conn.close()
+    return result
+
+
+def is_question_favorite(user_id, question_id):
+    """检查题目是否已收藏"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM favorites WHERE user_id = ? AND question_id = ?",
+               (user_id, question_id))
+    result = cur.fetchone() is not None
+    conn.close()
+    return result
+
+
+def get_question_count_by_category(category_id):
+    """获取分类题目数量"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM questions WHERE category_id = ? AND status = 1", (category_id,))
+    result = cur.fetchone()[0]
+    conn.close()
+    return result
+
+
+def get_question_position_in_category(category_id, qid):
+    """获取题目在分类中的位置"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM questions WHERE category_id = ? AND id <= ? AND status = 1",
+               (category_id, qid))
+    position = cur.fetchone()[0]
+    conn.close()
+    return position
+
+
+def get_random_questions(subject_id, category_id=None, count=10):
+    """随机获取题目（封装版）"""
+    conn = get_db()
+    cur = conn.cursor()
+    if category_id:
+        cur.execute("""
+            SELECT * FROM questions
+            WHERE category_id = ? AND status = 1
+            ORDER BY RANDOM() LIMIT ?
+        """, (category_id, count))
+    else:
+        cur.execute("""
+            SELECT * FROM questions
+            WHERE subject_id = ? AND status = 1
+            ORDER BY RANDOM() LIMIT ?
+        """, (subject_id, count))
+    result = cur.fetchall()
+    conn.close()
+    return result
+
+
+def get_sequential_questions(subject_id, category_id=None):
+    """顺序获取题目（封装版）"""
+    conn = get_db()
+    cur = conn.cursor()
+    if category_id:
+        cur.execute("""
+            SELECT * FROM questions
+            WHERE category_id = ? AND status = 1
+            ORDER BY id
+        """, (category_id,))
+    else:
+        cur.execute("""
+            SELECT * FROM questions
+            WHERE subject_id = ? AND status = 1
+            ORDER BY id
+        """, (subject_id,))
+    result = cur.fetchall()
     conn.close()
     return result

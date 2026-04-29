@@ -6,6 +6,7 @@
 import json
 import csv
 import io
+import sqlite3
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session, jsonify
 from auth import admin_required, login_required
 from models import (
@@ -15,6 +16,8 @@ from models import (
     get_questions_by_subject, create_question, update_question, delete_question, get_question,
     get_all_subjects_for_permission, get_user_permissions, set_user_subject_permission,
     get_user_by_id, update_user_last_login, hash_password,
+    # 新增
+    get_category, get_subject_by_id,
 )
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
@@ -62,10 +65,8 @@ def check_admin():
 @admin_bp.route('/')
 @admin_bp.route('')
 def dashboard():
-    import sqlite3
-    import os
-    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database.db')
-    conn = sqlite3.connect(DB_PATH)
+    from models import get_db
+    conn = get_db()
     cur = conn.cursor()
     
     cur.execute("SELECT COUNT(*) FROM users WHERE status = 1")
@@ -129,9 +130,8 @@ def reset_password(user_id):
         flash('密码不能为空', 'error')
         return redirect(url_for('admin.users'))
     
-    import sqlite3
-    DB_PATH = 'database.db'
-    conn = sqlite3.connect(DB_PATH)
+    from models import get_db
+    conn = get_db()
     cur = conn.cursor()
     cur.execute("UPDATE users SET password_hash = ? WHERE id = ?", (hash_password(new_password), user_id))
     conn.commit()
@@ -196,17 +196,9 @@ def create_category_page(subject_id):
     
     level = 1
     if parent_id > 0:
-        # 根据父级分类确定 level
-        import sqlite3
-        DB_PATH = 'database.db'
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        cur.execute("SELECT level FROM categories WHERE id = ?", (parent_id,))
-        parent = cur.fetchone()
+        parent = get_category(parent_id)
         if parent:
             level = parent['level'] + 1
-        conn.close()
     
     create_category(subject_id, parent_id, name, level)
     flash(f'分类 {name} 创建成功', 'success')
@@ -215,15 +207,8 @@ def create_category_page(subject_id):
 
 @admin_bp.route('/categories/<int:category_id>/delete', methods=['POST'])
 def delete_category_page(category_id):
-    import sqlite3
-    DB_PATH = 'database.db'
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT subject_id FROM categories WHERE id = ?", (category_id,))
-    cat = cur.fetchone()
+    cat = get_category(category_id)
     subject_id = cat['subject_id'] if cat else None
-    conn.close()
     
     if subject_id:
         delete_category(category_id)
@@ -318,15 +303,8 @@ def edit_question_page(qid):
 
 @admin_bp.route('/questions/<int:qid>/delete', methods=['POST'])
 def delete_question_page(qid):
-    import sqlite3
-    DB_PATH = 'database.db'
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT subject_id FROM questions WHERE id = ?", (qid,))
-    q = cur.fetchone()
-    subject_id = q['subject_id'] if q else None
-    conn.close()
+    question = get_question(qid)
+    subject_id = question['subject_id'] if question else None
     
     if subject_id:
         delete_question(qid)
@@ -394,36 +372,29 @@ def import_page():
         imported = 0
         errors = 0
         
+        # 优化：一次加载所有分类到内存，避免每行 N 次 DB 查询
+        from models import get_db
+        conn = get_db()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT id, subject_id, parent_id, name, level FROM categories WHERE subject_id = ?",
+                   (subject_id,))
+        all_cats = {f"{r['level']}_{r['name']}": r['id'] for r in cur.fetchall()}
+        conn.close()
+        
         for row in reader:
             try:
-                # 获取或创建分类
                 category_id = None
                 for level in [3, 2, 1]:
                     cat_name = row.get(f'category_l{level}', '').strip()
                     if cat_name:
-                        # 查找或创建分类
-                        import sqlite3
-                        DB_PATH = 'database.db'
-                        conn = sqlite3.connect(DB_PATH)
-                        conn.row_factory = sqlite3.Row
-                        cur = conn.cursor()
-                        
-                        if level == 1:
-                            cur.execute("SELECT id FROM categories WHERE subject_id = ? AND level = 1 AND name = ?",
-                                       (subject_id, cat_name))
-                        else:
-                            # 查找父级
-                            parent_name = row.get(f'category_l{level-1}', '').strip()
-                            cur.execute("""
-                                SELECT c.id FROM categories c
-                                JOIN categories p ON c.parent_id = p.id
-                                WHERE c.subject_id = ? AND c.level = ? AND c.name = ? AND p.name = ?
-                            """, (subject_id, level, cat_name, parent_name))
-                        
-                        cat = cur.fetchone()
-                        if cat:
-                            category_id = cat['id']
-                        conn.close()
+                        key = f"{level}_{cat_name}"
+                        if key in all_cats:
+                            category_id = all_cats[key]
+                            break
+                        elif level == 1:
+                            # 一级分类没找到，跳过
+                            break
                 
                 if not category_id:
                     errors += 1
@@ -447,7 +418,7 @@ def import_page():
                 if data['stem'] and data['answer']:
                     create_question(data)
                     imported += 1
-            except Exception as e:
+            except Exception:
                 errors += 1
                 continue
         
