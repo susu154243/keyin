@@ -7,7 +7,6 @@ import hashlib
 import os
 import json
 from datetime import datetime, timedelta
-from functools import lru_cache
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database.db')
 
@@ -30,11 +29,15 @@ def serialize_row(row):
 # ==================== 用户相关 ====================
 
 def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
+    """使用 Werkzeug pbkdf2:sha256 加密密码（有盐值、60万次迭代）"""
+    from werkzeug.security import generate_password_hash
+    return generate_password_hash(password)
 
 
 def authenticate_user(username, password):
-    """验证用户登录（兼容旧版 pbkdf2 和新版 sha256 密码格式）"""
+    """验证用户登录（兼容新版 pbkdf2 和旧版 sha256 密码格式）"""
+    from werkzeug.security import check_password_hash
+    
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT * FROM users WHERE username = ? AND status = 1", (username,))
@@ -46,16 +49,17 @@ def authenticate_user(username, password):
     pw_hash = user['password_hash']
     match = False
     
-    # 尝试新版 sha256
-    if pw_hash == hash_password(password):
-        match = True
-    # 尝试旧版 Werkzeug pbkdf2
-    elif pw_hash.startswith('pbkdf2:'):
-        try:
-            from werkzeug.security import check_password_hash
-            match = check_password_hash(pw_hash, password)
-        except ImportError:
-            pass
+    # 尝试新版 Werkzeug pbkdf2
+    if pw_hash.startswith('pbkdf2:'):
+        match = check_password_hash(pw_hash, password)
+    # 兼容旧版 sha256（无盐值），验证后自动升级
+    elif len(pw_hash) == 64:
+        match = pw_hash == hashlib.sha256(password.encode()).hexdigest()
+        if match:
+            # 自动升级到 pbkdf2
+            new_hash = hash_password(password)
+            cur.execute("UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user['id']))
+            conn.commit()
     
     conn.close()
     return user if match else None
@@ -545,11 +549,24 @@ def toggle_favorite(user_id, question_id, subject_id=1):
 # ==================== SM-2 复习计划 ====================
 
 def sm2_schedule(quality, ease_factor, interval, repetitions):
-    """SM-2 间隔重复算法"""
-    new_ease = ease_factor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
+    """SM-2 间隔重复算法（适配 0-4 评分）
+    
+    quality: 0=忘了, 1=模糊, 2=一般, 3=简单, 4=秒答
+    原版公式基于 0-5 评分，直接套用到 0-4 会导致 quality=4 增量反常（+0.02 < quality=3 的 +0.10）。
+    改用查表法，确保 ease 增量随质量单调递增。
+    """
+    delta_map = {
+        0: -0.50,  # 忘了：大幅下降
+        1: -0.30,  # 模糊：适度下降
+        2: 0.00,   # 一般：不变
+        3: +0.10,  # 简单：小幅增长
+        4: +0.25,  # 秒答：较大增长
+    }
+    new_ease = ease_factor + delta_map.get(quality, 0)
     new_ease = max(1.3, new_ease)
     
-    if quality < 3:
+    if quality < 2:
+        # 失败：重置
         new_reps = 0
         new_interval = 1
     else:
@@ -557,7 +574,7 @@ def sm2_schedule(quality, ease_factor, interval, repetitions):
         if new_reps == 1:
             new_interval = 1
         elif new_reps == 2:
-            new_interval = 6
+            new_interval = 3
         else:
             new_interval = max(1, int(interval * new_ease))
     
@@ -578,7 +595,7 @@ def get_due_questions(user_id, category_id=None, subject_id=None, limit=20):
     
     if category_id:
         cur.execute("""
-            SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions
+            SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions, rs.next_review, rs.last_quality
             FROM questions q
             JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
             WHERE q.category_id = ? AND q.status = 1 AND rs.next_review <= ?
@@ -587,7 +604,7 @@ def get_due_questions(user_id, category_id=None, subject_id=None, limit=20):
         """, (user_id, category_id, now, limit))
     elif subject_id:
         cur.execute("""
-            SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions
+            SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions, rs.next_review, rs.last_quality
             FROM questions q
             JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
             WHERE q.subject_id = ? AND q.status = 1 AND rs.next_review <= ?
@@ -596,7 +613,7 @@ def get_due_questions(user_id, category_id=None, subject_id=None, limit=20):
         """, (user_id, subject_id, now, limit))
     else:
         cur.execute("""
-            SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions
+            SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions, rs.next_review, rs.last_quality
             FROM questions q
             JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
             WHERE q.status = 1 AND rs.next_review <= ?
@@ -610,7 +627,13 @@ def get_due_questions(user_id, category_id=None, subject_id=None, limit=20):
 
 
 def get_new_questions(user_id, category_id=None, limit=5):
-    """获取用户还未复习过的新题目"""
+    """获取用户还未复习过的新题目
+    
+    参数:
+        category_id: 必填。按分类取新题。
+    注意:
+        不传 category_id 时无法确定科目范围，返回空列表。
+    """
     conn = get_db()
     cur = conn.cursor()
     
@@ -623,16 +646,8 @@ def get_new_questions(user_id, category_id=None, limit=5):
             LIMIT ?
         """, (category_id, user_id, limit))
     else:
-        # 注意：subject_id 从分类推导，不再用 category_id 冒充 subject_id
-        cur.execute("""
-            SELECT q.* FROM questions q
-            WHERE q.subject_id = (
-                SELECT subject_id FROM categories ORDER BY id LIMIT 1
-            ) AND q.status = 1
-            AND q.id NOT IN (SELECT question_id FROM review_schedule WHERE user_id = ?)
-            ORDER BY q.id
-            LIMIT ?
-        """, (user_id, limit))
+        # 不传 category_id 时无法确定科目范围，返回空
+        return []
     
     new_qs = [serialize_row(r) for r in cur.fetchall()]
     conn.close()
@@ -729,20 +744,21 @@ def update_review_schedule(user_id, question_id, subject_id, quality):
         cur.execute("""
             UPDATE review_schedule
             SET ease_factor = ?, interval = ?, repetitions = ?,
-                next_review = ?, last_review = ?
+                next_review = ?, last_review = ?, last_quality = ?
             WHERE user_id = ? AND question_id = ?
         """, (result['ease_factor'], result['interval'], result['repetitions'],
               next_review.strftime('%Y-%m-%d %H:%M:%S'),
               now.strftime('%Y-%m-%d %H:%M:%S'),
-              user_id, question_id))
+              quality, user_id, question_id))
     else:
         cur.execute("""
-            INSERT INTO review_schedule (user_id, question_id, subject_id, ease_factor, interval, repetitions, next_review, last_review)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO review_schedule (user_id, question_id, subject_id, ease_factor, interval, repetitions, next_review, last_review, last_quality)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (user_id, question_id, subject_id,
               result['ease_factor'], result['interval'], result['repetitions'],
               next_review.strftime('%Y-%m-%d %H:%M:%S'),
-              now.strftime('%Y-%m-%d %H:%M:%S')))
+              now.strftime('%Y-%m-%d %H:%M:%S'),
+              quality))
     
     conn.commit()
     conn.close()
@@ -756,7 +772,7 @@ def get_due_today(user_id, category_id):
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions, rs.next_review
+        SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions, rs.next_review, rs.last_quality
         FROM questions q
         JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
         WHERE q.category_id = ? AND q.status = 1 AND rs.next_review <= ?
@@ -804,9 +820,9 @@ def get_study_progress(user_id, category_id):
     """, (user_id, category_id, now))
     due_today = cur.fetchone()[0]
 
-    # 评分分布（根据 ease_factor 和 repetitions 推断）
+    # 评分分布（根据 last_quality 直接读取，旧记录兜底推断）
     cur.execute("""
-        SELECT rs.ease_factor, rs.repetitions, rs.interval FROM review_schedule rs
+        SELECT rs.ease_factor, rs.repetitions, rs.interval, rs.last_quality FROM review_schedule rs
         JOIN questions q ON q.id = rs.question_id
         WHERE rs.user_id = ? AND q.category_id = ?
     """, (user_id, category_id))
@@ -845,7 +861,8 @@ def get_question_attempt_stats(user_id, category_id):
             rs.ease_factor,
             rs.repetitions,
             rs.interval,
-            rs.next_review
+            rs.next_review,
+            rs.last_quality
         FROM questions q
         LEFT JOIN history h ON h.question_id = q.id AND h.user_id = ?
         LEFT JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
@@ -880,17 +897,22 @@ def get_question_attempt_stats(user_id, category_id):
 
 
 def infer_quality(record):
-    """根据SM-2记录推断上次评分倾向"""
+    """根据SM-2记录推断上次评分倾向
+    
+    优先读取 last_quality（原始评分值），旧记录兜底推断。
+    """
+    quality_map = {0: '忘了', 1: '模糊', 2: '一般', 3: '简单', 4: '秒答'}
+    
+    # 新记录：直接读取 last_quality
+    if isinstance(record, dict) and record.get('last_quality') is not None:
+        return quality_map.get(record['last_quality'], '一般')
+    
+    # 旧记录（last_quality 为 NULL）：兜底推断
     reps = record['repetitions']
     ease = record['ease_factor']
-    interval = record['interval']
-    if reps == 0 and ease < 1.8:
-        return '忘了'
-    elif reps == 0 and ease < 2.2:
-        return '模糊'
-    elif reps >= 3 and interval >= 15:
+    if reps >= 3:
         return '秒答'
-    elif reps >= 2 and ease >= 2.4:
+    elif reps >= 2:
         return '简单'
     elif reps >= 1:
         return '一般'
@@ -1218,3 +1240,56 @@ def get_sequential_questions(subject_id, category_id=None):
     result = cur.fetchall()
     conn.close()
     return result
+
+
+def get_unreviewed_questions(user_id, category_id, count=None):
+    """获取分类下用户尚未练习过的题目（不在 review_schedule 中）"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT q.* FROM questions q
+        WHERE q.category_id = ? AND q.status = 1
+          AND q.id NOT IN (
+              SELECT rs.question_id FROM review_schedule rs WHERE rs.user_id = ?
+          )
+        ORDER BY q.id
+    """, (category_id, user_id))
+    rows = cur.fetchall()
+    if count and count > 0 and count < len(rows):
+        rows = rows[:count]
+    conn.close()
+    return rows
+
+
+def get_unreviewed_count(user_id, category_id):
+    """获取分类下新题数量"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT COUNT(*) FROM questions q
+        WHERE q.category_id = ? AND q.status = 1
+          AND q.id NOT IN (
+              SELECT rs.question_id FROM review_schedule rs WHERE rs.user_id = ?
+          )
+    """, (category_id, user_id))
+    result = cur.fetchone()[0]
+    conn.close()
+    return result
+
+
+def get_mastered_questions(user_id, category_id):
+    """获取已掌握的题目（repetitions>=3 AND ease_factor>=2.5 AND interval>=15）"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions,
+               rs.next_review, rs.last_review, rs.last_quality
+        FROM review_schedule rs
+        JOIN questions q ON q.id = rs.question_id
+        WHERE rs.user_id = ? AND q.category_id = ? AND q.status = 1
+          AND rs.repetitions >= 3 AND rs.ease_factor >= 2.5 AND rs.interval >= 15
+        ORDER BY rs.interval DESC, rs.repetitions DESC
+    """, (user_id, category_id))
+    rows = [serialize_row(r) for r in cur.fetchall()]
+    conn.close()
+    return rows

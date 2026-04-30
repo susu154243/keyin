@@ -1,5 +1,35 @@
 # 刻印 (KeyIn) 变更日志
 
+## v0.13.0 - 2026-05-01
+**练习模式题目分流 + 新增已掌握版块**
+
+- 练习模式/考试模式只出**新题**（不在 review_schedule 中的题目）
+- 新增 `get_unreviewed_questions()` / `get_unreviewed_count()` 模型函数
+- 考试提交后所有题目（不仅错题）进入复习计划
+- 新增**已掌握**版块：展示 SM-2 达标题目（repetitions≥3, ease_factor≥2.5, interval≥15）
+- 新增 `get_mastered_questions()` 模型函数
+- 新增 `/mastered` 列表页：折叠展开题目详情，支持"取消掌握"操作
+- 学习设置页 UI 升级为四大卡片（2×2 网格）+ 四指标栏
+- 新增 `infer_quality` 导入到 app.py 用于已掌握页展示
+
+## v0.12.0 - 2026-04-30
+**代码安全修复 + 数据库清理**
+
+- SECRET_KEY 替换为随机值（systemd 配置）
+- 旧密码 SHA256 登录时自动升级到 pbkdf2
+- debug=True 改为 False
+- admin.py 5 处 except Exception 改为带日志捕获
+- 清理 19 条孤立 history 记录
+- 删除废弃 exam_sessions 表
+- 删除 questions.category 遗留列
+
+## v0.11.0 - 2026-04-30
+**代码质量修复 + 文档生成**
+
+- 4 种图表：学习热力图 (90 天)/每日趋势双轴图/分类掌握度/保留率曲线
+- 新增 models.py 统计函数：get_stats_summary, get_daily_trend, get_heatmap_data, get_category_mastery, get_retention_curve
+- 依赖：Chart.js (CDN)
+
 ## v0.10.0 - 2026-04-30
 **学习设置页布局升级：三模式卡片 + 做题次数统计**
 

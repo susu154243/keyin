@@ -6,6 +6,7 @@
 import json
 import csv
 import io
+import logging
 import os
 import re
 import sqlite3
@@ -13,6 +14,8 @@ import zipfile
 import hashlib
 import zstandard
 import tempfile
+
+logger = logging.getLogger(__name__)
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session, jsonify
 from auth import admin_required, login_required
 from models import get_db
@@ -183,8 +186,8 @@ def _extract_apkg(apkg_path: str, subject_id: int):
                 with dctx.stream_reader(memoryview(raw)) as reader:
                     media_data = reader.read()
                 media_map = _parse_media_protobuf(media_data)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"解析 media protobuf 失败: {e}")
         
         # 3. 构建 sha1 → 文件名映射
         sha1_to_name = {v['sha1']: k for k, v in media_map.items()}
@@ -208,7 +211,8 @@ def _extract_apkg(apkg_path: str, subject_id: int):
                     dctx = zstandard.ZstdDecompressor()
                     with dctx.stream_reader(memoryview(compressed)) as reader:
                         decompressed = reader.read()
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"解压媒体条目 {entry_idx} 失败: {e}")
                     entry_idx += 1
                     continue
                 
@@ -245,7 +249,8 @@ def _extract_apkg(apkg_path: str, subject_id: int):
                         with open(decompressed_db, 'wb') as f:
                             f.write(db_data)
                         db_path = decompressed_db
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"zstd 解压数据库失败，使用原始文件: {e}")
                         db_path = p
                 else:
                     db_path = p
@@ -268,8 +273,8 @@ def _extract_apkg(apkg_path: str, subject_id: int):
                     deck_name = name
                     break
             raw_conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"读取 Anki decks 表失败: {e}")
         
         # 7. 解析牌组名称，自动创建分类
         # 预期格式: "1.1 信息化发展--信息与信息化"
@@ -823,7 +828,8 @@ def import_page():
                 if data['stem'] and data['answer']:
                     create_question(data)
                     imported += 1
-            except Exception:
+            except Exception as e:
+                logger.debug(f"导入题目失败: {e}")
                 errors += 1
                 continue
         

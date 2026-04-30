@@ -15,11 +15,11 @@ from flask import (Flask, render_template, request, redirect, url_for,
                    flash, session, jsonify, abort)
 
 from models import (
-    authenticate_user, get_user_by_id, get_user_subjects, get_questions_by_category,
-    get_question, get_user_history, get_user_wrong_questions, get_user_favorites,
+    authenticate_user, get_user_by_id, get_user_subjects,
+    get_question, get_user_wrong_questions, get_user_favorites,
     toggle_favorite, save_answer, get_all_subjects, get_leaf_categories,
     get_categories_tree, update_user_last_login,
-    get_due_questions, get_new_questions, get_review_progress,
+    get_review_progress,
     update_review_schedule, get_review_schedule, is_question_mastered, get_db,
     get_due_today, get_study_progress, infer_quality, get_question_attempt_stats,
     get_stats_summary, get_daily_trend, get_heatmap_data,
@@ -31,13 +31,15 @@ from models import (
     get_random_questions as get_random_questions_model,
     get_sequential_questions as get_sequential_questions_model,
     get_questions_by_category as get_questions_by_category_model,
-    hash_password, create_user, get_category,
+    get_unreviewed_questions, get_unreviewed_count, get_mastered_questions,
+    hash_password, create_user, get_category, serialize_row,
 )
 from auth import login_required, get_current_user
 from admin import admin_bp
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'keyin-2026-secret-key-change-me')
+app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # 注册管理端 Blueprint
 app.register_blueprint(admin_bp)
@@ -45,25 +47,6 @@ app.register_blueprint(admin_bp)
 
 # ==================== 辅助函数 ====================
 
-def init_db():
-    """初始化数据库：如果 questions 表为空，检查 CSV 是否存在"""
-    db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'database.db')
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) as cnt FROM questions WHERE status = 1")
-    count = cur.fetchone()[0]
-    conn.close()
-    if count == 0:
-        csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'maogai_2025.csv')
-        if os.path.exists(csv_path):
-            print("CSV file exists but no active questions. Run migrate.py first.")
-
-
-def serialize_row(row):
-    """将 sqlite3.Row 转换为 dict"""
-    if row is None:
-        return None
-    return dict(row)
 
 
 def parse_options(options_str):
@@ -172,7 +155,6 @@ def subject_detail(subject_id):
     if not subject:
         abort(404)
     
-    tree = get_categories_tree(subject_id)
     total_questions = get_questions_count(subject_id)
     real_exam_count = get_real_exam_count(subject_id)
     years = get_exam_years(subject_id)
@@ -187,7 +169,6 @@ def subject_detail(subject_id):
     
     return render_template('subject_detail.html',
                           subject=subject,
-                          tree=tree,
                           total_questions=total_questions,
                           real_exam_count=real_exam_count,
                           overall_accuracy=overall_accuracy,
@@ -228,26 +209,12 @@ def practice(subject_id):
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>')
 @login_required
 def practice_category(subject_id, category_id):
-    """按分类答题（SM-2 间隔重复）"""
+    """按分类答题入口：重定向到学习设置页"""
     cat = get_category(category_id)
     if not cat or cat['subject_id'] != subject_id:
         abort(404)
-    
-    user_id = session['user_id']
-    
-    questions = get_due_questions(user_id, category_id, limit=20)
-    if not questions:
-        questions = get_new_questions(user_id, category_id, limit=5)
-    
-    if not questions:
-        questions = get_sequential_questions(subject_id, category_id)
-    
-    if not questions:
-        flash('该分类下暂无题目', 'info')
-        return redirect(url_for('practice', subject_id=subject_id))
-    
-    qid = questions[0]['id']
-    return redirect(url_for('practice_setup', subject_id=subject_id, category_id=category_id))
+
+    return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
 
 
 # ==================== 章节练习：模式选择 + 考试/练习模式 ====================
@@ -264,6 +231,11 @@ def study_setup(subject_id, category_id):
 
     # 学习进度统计
     progress = get_study_progress(user_id, category_id)
+    # 新题数量
+    progress['unreviewed'] = get_unreviewed_count(user_id, category_id)
+    # 已掌握列表
+    mastered_list = get_mastered_questions(user_id, category_id)
+    progress['mastered_count'] = len(mastered_list)
 
     # 今日待复习题目列表
     due_today_list = get_due_today(user_id, category_id)
@@ -283,6 +255,7 @@ def study_setup(subject_id, category_id):
     return render_template('study_setup.html',
                           subject=subject, category=cat,
                           progress=progress,
+                          mastered_list=mastered_list,
                           due_today_list=due_today_list,
                           answered_today=answered_today,
                           attempt_stats=attempt_stats)
@@ -323,9 +296,9 @@ def study_today_review(subject_id, category_id):
     return redirect(url_for('chapter_practice_next', subject_id=subject_id, category_id=category_id))
 
 
-def _get_chapter_questions(subject_id, category_id, count=None):
-    """获取章节练习题目列表（顺序），返回 (dict_list, raw_list)"""
-    rows = get_questions_by_category_model(category_id)
+def _get_chapter_questions(subject_id, category_id, user_id, count=None):
+    """获取章节练习题目列表（仅新题），返回 (dict_list, raw_list)"""
+    rows = get_unreviewed_questions(user_id, category_id)
     if count and count > 0 and count < len(rows):
         rows = rows[:count]
     result = []
@@ -344,10 +317,10 @@ def chapter_exam(subject_id, category_id):
     if not cat or cat['subject_id'] != subject_id:
         abort(404)
     count = request.args.get('count', type=int)
-    questions, _ = _get_chapter_questions(subject_id, category_id, count=count)
+    questions, _ = _get_chapter_questions(subject_id, category_id, session['user_id'], count=count)
     if not questions:
-        flash('该分类下暂无题目', 'info')
-        return redirect(url_for('practice', subject_id=subject_id))
+        flash('该分类下暂无新题，请进入复习模式', 'info')
+        return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
     subject = get_subject_by_id(subject_id)
     return render_template('chapter_exam.html', questions=questions, subject=subject, category=cat)
 
@@ -357,7 +330,7 @@ def chapter_exam(subject_id, category_id):
 def chapter_exam_submit(subject_id, category_id):
     """提交考试模式试卷"""
     count = request.args.get('count', type=int)
-    _, raw = _get_chapter_questions(subject_id, category_id, count=count)
+    _, raw = _get_chapter_questions(subject_id, category_id, session['user_id'], count=count)
     questions = []
     for r in raw:
         q = serialize_row(r)
@@ -377,9 +350,8 @@ def chapter_exam_submit(subject_id, category_id):
         if is_correct:
             correct_count += 1
         save_answer(user_id, q['id'], user_answer, 1 if is_correct else 0, subject_id)
-        # P1-8: 考试错题自动加入复习计划
-        if not is_correct:
-            update_review_schedule(user_id, q['id'], subject_id, 0)
+        # 考过的题目全部进入复习计划（对=5分，错=0分）
+        update_review_schedule(user_id, q['id'], subject_id, 5 if is_correct else 0)
         details.append({
             'id': q['id'],
             'stem': q['stem'],
@@ -408,10 +380,10 @@ def chapter_practice_start(subject_id, category_id):
     if not cat or cat['subject_id'] != subject_id:
         abort(404)
     count = request.args.get('count', type=int)
-    questions, _ = _get_chapter_questions(subject_id, category_id, count=count)
+    questions, _ = _get_chapter_questions(subject_id, category_id, session['user_id'], count=count)
     if not questions:
-        flash('该分类下暂无题目', 'info')
-        return redirect(url_for('practice', subject_id=subject_id))
+        flash('该分类下暂无新题，请进入复习模式', 'info')
+        return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
 
     # 初始化会话队列
     session['practice'] = {
@@ -659,15 +631,12 @@ def chapter_practice_skip(subject_id, category_id, qid):
 
     update_review_schedule(session['user_id'], qid, subject_id, quality)
 
-    # 队列调度
+    # 队列调度：答对（quality>=2）移出队列
+    # 答错（quality 0/1）的队列调度已在 answer 路由处理，skip 不再重复
     queue = p.get('queue', [])
     if quality >= 2:
         if qid in queue:
             queue.remove(qid)
-    elif quality in (0, 1) and retry < 5 and qid in queue:
-        queue.remove(qid)
-        queue.append(qid)
-        p['retry_count'][qid] = retry + 1
 
     # 移除当前题（如果还在队列头部）
     if queue and queue[0] == qid:
@@ -955,6 +924,43 @@ def start_mock_exam(subject_id):
     return render_template('exam.html', questions=questions, subject=subject)
 
 
+# ==================== 已掌握题目 ====================
+
+@app.route('/subjects/<int:subject_id>/study/<int:category_id>/mastered')
+@login_required
+def mastered(subject_id, category_id):
+    """已掌握题目列表页"""
+    cat = get_category(category_id)
+    if not cat or cat['subject_id'] != subject_id:
+        abort(404)
+    subject = get_subject_by_id(subject_id)
+    mastered_list = get_mastered_questions(session['user_id'], category_id)
+    # 添加推断评分和选项解析
+    for q in mastered_list:
+        q['inferred_quality'] = infer_quality(q)
+        q['options'] = parse_options(q.get('options', '{}'))
+    return render_template('mastered.html',
+                          subject=subject, category=cat,
+                          mastered_list=mastered_list)
+
+
+@app.route('/subjects/<int:subject_id>/study/<int:category_id>/mastered/<qid>/unmaster', methods=['POST'])
+@login_required
+def unmaster_question(subject_id, category_id, qid):
+    """取消掌握：删除 review_schedule 记录，题目回到新题池"""
+    from models import get_db
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        'DELETE FROM review_schedule WHERE user_id = ? AND question_id = ?',
+        (session['user_id'], qid)
+    )
+    conn.commit()
+    conn.close()
+    flash('已取消掌握，题目回到练习池', 'success')
+    return redirect(url_for('mastered', subject_id=subject_id, category_id=category_id))
+
+
 # ==================== 统计分析 ====================
 
 @app.route('/subjects/<int:subject_id>/statistics')
@@ -1063,4 +1069,4 @@ def server_error(e):
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=32220, debug=True)
+    app.run(host='0.0.0.0', port=32220, debug=False)
