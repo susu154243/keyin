@@ -1,0 +1,103 @@
+{% extends 'base.html' %}
+
+{% block title %}练习总结 - {{ category.name }}{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('subject_detail', subject_id=subject.id) }}" class="btn btn-outline-primary btn-sm">
+        <i class="fas fa-arrow-left"></i> 返回科目
+    </a>
+</div>
+
+<div class="card text-center p-4 mb-4">
+    <h2>🎉 本轮练习完成！</h2>
+    <p class="text-muted">{{ category.name }}</p>
+
+    <!-- 统计概览 -->
+    <div class="row g-3 mt-3">
+        <div class="col-6 col-md-3">
+            <div class="stat-box">
+                <div class="stat-value">{{ total_attempts }}</div>
+                <div class="stat-label">总答题</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="stat-box stat-success">
+                <div class="stat-value">{{ first_correct }}/{{ initial_count }}</div>
+                <div class="stat-label">首次答对</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="stat-box stat-warning">
+                <div class="stat-value">{{ first_rate }}%</div>
+                <div class="stat-label">首次正确率</div>
+            </div>
+        </div>
+        <div class="col-6 col-md-3">
+            <div class="stat-box {% if stubborn %}stat-danger{% endif %}">
+                <div class="stat-value">{{ stubborn|length }}</div>
+                <div class="stat-label">顽固题</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 下次复习安排 -->
+<div class="card p-4 mb-4">
+    <h4><i class="fas fa-calendar-alt"></i> 下次复习安排</h4>
+    <div class="review-groups mt-3">
+        {% for label, count in review_groups.items() %}
+        {% if count > 0 %}
+        <div class="review-group-item">
+            <span class="review-label">{{ label }}</span>
+            <div class="review-bar" style="width: {{ (count / initial_count * 100)|round(1) }}%;">
+                <span>{{ count }} 题</span>
+            </div>
+        </div>
+        {% endif %}
+        {% endfor %}
+    </div>
+</div>
+
+<!-- 顽固题 -->
+{% if stubborn %}
+<div class="card p-4 mb-4">
+    <h4><i class="fas fa-exclamation-triangle text-danger"></i> 顽固题（需重点关注）</h4>
+    <ul class="stubborn-list mt-3">
+        {% for qid in stubborn %}
+        <li class="stubborn-item">
+            <a href="{{ url_for('browse', expand=qid) }}">题目 {{ qid }}</a>
+        </li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<!-- 操作按钮 -->
+<div class="text-center mt-4">
+    <a href="{{ url_for('subject_detail', subject_id=subject.id) }}" class="btn btn-primary btn-lg">
+        <i class="fas fa-home"></i> 返回科目
+    </a>
+    <a href="{{ url_for('practice_setup', subject_id=subject.id, category_id=category.id) }}" class="btn btn-outline-secondary btn-lg ms-2">
+        <i class="fas fa-redo"></i> 继续练习
+    </a>
+</div>
+
+<style>
+.stat-box { padding: 1.5rem; background: var(--gray-100); border-radius: var(--border-radius); }
+.stat-value { font-size: 2rem; font-weight: 700; color: var(--primary-color); }
+.stat-label { color: var(--gray-600); font-size: 0.9rem; }
+.stat-success .stat-value { color: var(--success-color); }
+.stat-warning .stat-value { color: var(--warning-color); }
+.stat-danger .stat-value { color: var(--danger-color); }
+
+.review-groups { max-width: 500px; margin: 0 auto; }
+.review-group-item { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.75rem; }
+.review-label { min-width: 60px; font-weight: 600; }
+.review-bar { height: 24px; background: var(--primary-color); border-radius: 12px; color: white; font-size: 0.8rem; display: flex; align-items: center; padding: 0 8px; min-width: 50px; }
+
+.stubborn-list { list-style: none; padding: 0; }
+.stubborn-item { padding: 0.5rem 0; border-bottom: 1px solid var(--gray-200); }
+.stubborn-item:last-child { border-bottom: none; }
+</style>
+{% endblock %}

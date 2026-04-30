@@ -1,8 +1,6 @@
-venv/
+database.db*
 __pycache__/
+venv/
 *.pyc
-*.pyo
-database.db
-*.bak
-.env
-.DS_Store
+static/media/
+tools/

@@ -1,0 +1,223 @@
+{% extends 'base.html' %}
+
+{% block title %}考试模式 - {{ category.name }}{% endblock %}
+
+{% block content %}
+<div class="exam-layout">
+    <!-- 主内容区 -->
+    <div class="exam-main">
+        <div class="exam-header-bar">
+            <a href="{{ url_for('practice_setup', subject_id=subject.id, category_id=category.id) }}" class="btn btn-outline-primary btn-sm">
+                <i class="fas fa-arrow-left"></i> 返回设置
+            </a>
+            <span class="exam-title-text">{{ category.name }}</span>
+            <span class="badge bg-primary">共 {{ questions|length }} 题</span>
+        </div>
+
+        <form id="examForm">
+        {% for q in questions %}
+        <div class="question-block" id="q-{{ q.id }}" data-index="{{ loop.index0 }}">
+            <div class="q-header">
+                <span class="q-number">第 {{ loop.index }} 题</span>
+                {% if q.qtype_text %}
+                <span class="badge bg-info">{{ q.qtype_text }}</span>
+                {% endif %}
+                {% if q.difficulty and q.difficulty != '无' %}
+                <span class="badge bg-warning">{{ q.difficulty }}</span>
+                {% endif %}
+            </div>
+            <div class="q-stem">{{ q.stem | safe }}</div>
+            <div class="q-options">
+                {% for key, val in q.options.items() %}
+                <div class="q-option">
+                    <label>
+                        {% if q.qtype_text == '多选题' %}
+                        <input type="checkbox" name="answer_{{ q.id }}" value="{{ key }}">
+                        {% else %}
+                        <input type="radio" name="answer_{{ q.id }}" value="{{ key }}" required>
+                        {% endif %}
+                        <span><strong>{{ key }}.</strong> {{ val | safe }}</span>
+                    </label>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endfor %}
+        </form>
+
+        <!-- 结果区 -->
+        <div id="examResult" style="display:none;"></div>
+    </div>
+
+    <!-- 右侧导航 -->
+    <div class="exam-nav">
+        <div class="exam-nav-title">题目导航</div>
+        <div class="exam-nav-grid" id="examNavGrid">
+            {% for q in questions %}
+            <button class="nav-dot" data-index="{{ loop.index0 }}" onclick="scrollToQuestion('{{ q.id }}')" title="第 {{ loop.index }} 题">
+                {{ loop.index }}
+            </button>
+            {% endfor %}
+        </div>
+        <div class="exam-nav-legend">
+            <span class="legend-item"><span class="legend-dot gray"></span>未答</span>
+            <span class="legend-item"><span class="legend-dot green"></span>正确</span>
+            <span class="legend-item"><span class="legend-dot red"></span>错误</span>
+        </div>
+        <button id="submitBtn" class="btn btn-primary btn-block mt-3" onclick="submitExam()">
+            <i class="fas fa-paper-plane"></i> 提交试卷
+        </button>
+        <a href="{{ url_for('subject_detail', subject_id=subject.id) }}" class="btn btn-outline-secondary btn-block mt-2">
+            <i class="fas fa-home"></i> 返回科目
+        </a>
+    </div>
+</div>
+
+<script>
+const questions = {{ questions | tojson }};
+const submitUrl = "{{ url_for('chapter_exam_submit', subject_id=subject.id, category_id=category.id) }}";
+const answered = {};
+
+// 监听选项变化更新导航状态
+document.querySelectorAll('.q-options input').forEach(input => {
+    input.addEventListener('change', function() {
+        const qBlock = this.closest('.question-block');
+        const qId = qBlock.id.replace('q-', '');
+        answered[qId] = true;
+        const dot = document.querySelector(`.nav-dot[data-index="${qBlock.dataset.index}"]`);
+        if (dot) dot.classList.add('answered');
+    });
+});
+
+function scrollToQuestion(qid) {
+    document.getElementById('q-' + qid).scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function submitExam() {
+    if (!confirm('确认提交试卷？')) return;
+    const formData = new FormData(document.getElementById('examForm'));
+    fetch(submitUrl, { method: 'POST', body: formData })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.success) { alert('提交失败'); return; }
+        renderResult(data);
+    })
+    .catch(err => { alert('提交失败: ' + err); });
+}
+
+function renderResult(data) {
+    document.getElementById('examForm').style.display = 'none';
+    document.getElementById('submitBtn').style.display = 'none';
+    const pct = data.score;
+    const cls = pct >= 60 ? 'bg-success' : 'bg-danger';
+    let html = `
+    <div class="result-summary card mb-4 text-center p-4">
+        <h2>考试结束</h2>
+        <div class="score-big ${cls}">${pct}%</div>
+        <p>答对 <strong>${data.correct_count}</strong> / ${data.total} 题</p>
+    </div>`;
+
+    data.details.forEach((d, i) => {
+        html += `
+        <div class="question-block" id="q-${d.id}">
+            <div class="q-header">
+                <span class="q-number">第 ${i+1} 题</span>
+                <span class="badge ${d.is_correct ? 'bg-success' : 'bg-danger'}">${d.is_correct ? '✅ 正确' : '❌ 错误'}</span>
+            </div>
+            <div class="q-stem">${d.stem}</div>
+            <div class="q-options result-options">`;
+        for (const [key, val] of Object.entries(d.options)) {
+            const isCorrect = key === d.correct_answer;
+            const userChose = d.user_answer.includes(key);
+            let cls2 = '';
+            if (isCorrect) cls2 = 'opt-correct';
+            else if (userChose && !isCorrect) cls2 = 'opt-wrong';
+            html += `<div class="q-option ${cls2}"><span><strong>${key}.</strong> ${val}</span>
+                ${isCorrect ? '<span class="opt-badge correct">✅ 正确答案</span>' : ''}
+                ${userChose && !isCorrect ? '<span class="opt-badge wrong">你的答案</span>' : ''}
+            </div>`;
+        }
+        html += `</div>`;
+        if (d.explanation) {
+            html += `<div class="q-explanation"><h5><i class="fas fa-lightbulb"></i> 解析</h5><div>${d.explanation}</div></div>`;
+        }
+        html += `</div>`;
+    });
+
+    html += `<a href="{{ url_for('subject_detail', subject_id=subject.id) }}" class="btn btn-outline-primary btn-block mt-3"><i class="fas fa-home"></i> 返回科目</a>`;
+
+    const resultDiv = document.getElementById('examResult');
+    resultDiv.innerHTML = html;
+    resultDiv.style.display = 'block';
+
+    // 更新导航状态
+    data.details.forEach((d, i) => {
+        const dot = document.querySelector(`.nav-dot[data-index="${i}"]`);
+        if (dot) {
+            dot.classList.remove('answered');
+            dot.classList.add(d.is_correct ? 'correct' : 'incorrect');
+        }
+    });
+}
+</script>
+
+<style>
+.exam-layout { display: flex; gap: 1.5rem; align-items: flex-start; }
+@media (max-width: 992px) {
+    .exam-layout { flex-direction: column; }
+    .exam-nav { order: -1; position: sticky; top: 60px; z-index: 100; }
+}
+.exam-main { flex: 1; min-width: 0; }
+.exam-header-bar { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.exam-title-text { font-weight: 600; font-size: 1.1rem; }
+
+.question-block { background: white; border-radius: var(--border-radius); padding: 1.5rem; margin-bottom: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.q-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+.q-number { font-weight: 700; color: var(--primary-color); }
+.q-stem { margin-bottom: 1rem; line-height: 1.8; }
+.q-option { margin-bottom: 0.5rem; padding: 0.5rem 0.75rem; border-radius: 6px; transition: var(--transition); }
+.q-option:hover { background: var(--gray-100); }
+.q-option input { margin-right: 0.5rem; }
+
+/* 结果选项高亮 */
+.result-options .q-option { pointer-events: none; }
+.opt-correct { background: rgba(46,196,182,0.1); border-left: 3px solid var(--success-color); }
+.opt-wrong { background: rgba(230,57,70,0.1); border-left: 3px solid var(--danger-color); }
+.opt-badge { font-size: 0.75rem; margin-left: 0.5rem; }
+.opt-badge.correct { color: var(--success-color); }
+.opt-badge.wrong { color: var(--danger-color); }
+
+.q-explanation { background: #f0f7ff; border-left: 3px solid var(--primary-color); padding: 1rem; margin-top: 1rem; border-radius: 0 6px 6px 0; }
+.q-explanation h5 { color: var(--primary-color); margin-bottom: 0.5rem; }
+
+/* 成绩 */
+.result-summary { padding: 2rem !important; }
+.score-big { font-size: 3rem; font-weight: 700; color: white; padding: 1rem; border-radius: var(--border-radius); margin: 1rem 0; }
+
+/* 导航面板 */
+.exam-nav {
+    width: 200px; flex-shrink: 0; position: sticky; top: 80px;
+    background: white; border-radius: var(--border-radius); padding: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.exam-nav-title { font-weight: 600; margin-bottom: 0.75rem; text-align: center; }
+.exam-nav-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.nav-dot {
+    width: 32px; height: 32px; border: 1px solid var(--gray-300); border-radius: 6px;
+    background: white; font-size: 0.75rem; cursor: pointer; display: flex;
+    align-items: center; justify-content: center; transition: var(--transition);
+}
+.nav-dot:hover { background: var(--gray-200); }
+.nav-dot.answered { background: #e8edff; border-color: var(--primary-color); color: var(--primary-color); }
+.nav-dot.correct { background: var(--success-color); color: white; border-color: var(--success-color); }
+.nav-dot.incorrect { background: var(--danger-color); color: white; border-color: var(--danger-color); }
+
+.exam-nav-legend { display: flex; gap: 0.75rem; margin-top: 0.75rem; font-size: 0.75rem; color: var(--gray-600); justify-content: center; }
+.legend-dot { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: middle; }
+.legend-dot.gray { background: var(--gray-300); }
+.legend-dot.green { background: var(--success-color); }
+.legend-dot.red { background: var(--danger-color); }
+
+.btn-block { display: block; width: 100%; }
+</style>
+{% endblock %}

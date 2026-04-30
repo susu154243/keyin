@@ -91,8 +91,8 @@
                     {% if level2.children %}
                     <div class="category-level-3">
                         {% for level3 in level2.children %}
-                        <a href="{{ url_for('practice_category', subject_id=subject.id, category_id=level3.id) }}" class="category-level-3-item">
-                            <i class="fas fa-file-alt"></i> {{ level3.name }}
+                        <a href="{{ url_for('practice_setup', subject_id=subject.id, category_id=level3.id) }}" class="category-level-3-item">
+                            <i class="fas fa-play-circle"></i> {{ level3.name }}
                         </a>
                         {% endfor %}
                     </div>

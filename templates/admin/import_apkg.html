@@ -1,0 +1,39 @@
+{% extends 'admin/base.html' %}
+{% block title %}Anki 导入{% endblock %}
+{% block content %}
+<div class="admin-header"><h1><i class="fas fa-upload"></i> Anki .apkg 导入</h1></div>
+
+<div class="card mb-3">
+    <h3 class="card-title">使用说明</h3>
+    <ul style="margin-left: 1.5rem; line-height: 1.8; color: var(--text-light);">
+        <li>从 Anki 导出的 .apkg 文件可直接导入</li>
+        <li>自动解析题目、选项、答案、解析</li>
+        <li>自动提取并保存图片到 <code>/static/media/</code></li>
+        <li>自动根据牌组名称创建二级和三级分类</li>
+        <li>牌组名称格式示例：<code>1.1 信息化发展--信息与信息化</code></li>
+        <li>自动创建：二级分类「第1章 信息化发展」+ 三级分类「1.1 信息与信息化」</li>
+    </ul>
+</div>
+
+<div class="card">
+    <form method="post" enctype="multipart/form-data">
+        <div class="form-group">
+            <label class="form-label">目标科目</label>
+            <select name="subject_id" class="form-control" required>
+                <option value="">请选择科目</option>
+                {% for s in subjects %}
+                <option value="{{ s.id }}">{{ s.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Anki .apkg 文件</label>
+            <input type="file" name="apkg_file" accept=".apkg" class="form-control" required>
+        </div>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-upload"></i> 导入</button>
+        <a href="{{ url_for('admin.import_page') }}" class="btn btn-secondary" style="margin-left: 0.5rem;">
+            <i class="fas fa-arrow-left"></i> 返回 CSV 导入
+        </a>
+    </form>
+</div>
+{% endblock %}

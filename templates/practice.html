@@ -15,22 +15,26 @@
     
     {% if tree %}
     <div class="category-tree">
-        {% for level1 in tree %}
+        {% for cat in tree %}
         <div class="category-level-1">
-            <h3><i class="fas fa-folder"></i> {{ level1.name }}</h3>
-            {% if level1.children %}
+            <h3><i class="fas fa-folder"></i> {{ cat.name }}</h3>
+            {% if cat.children %}
             <div class="category-level-2">
-                {% for level2 in level1.children %}
+                {% for child in cat.children %}
                 <div class="category-level-2-item">
-                    <h4><i class="fas fa-folder-open"></i> {{ level2.name }}</h4>
-                    {% if level2.children %}
+                    {% if child.children %}
+                    <h4><i class="fas fa-folder-open"></i> {{ child.name }}</h4>
                     <div class="category-level-3">
-                        {% for level3 in level2.children %}
-                        <a href="{{ url_for('practice_category', subject_id=subject.id, category_id=level3.id) }}" class="category-level-3-item">
-                            <i class="fas fa-play-circle"></i> {{ level3.name }}
+                        {% for sub in child.children %}
+                        <a href="{{ url_for('practice_setup', subject_id=subject.id, category_id=sub.id) }}" class="category-level-3-item">
+                            <i class="fas fa-play-circle"></i> {{ sub.name }}
                         </a>
                         {% endfor %}
                     </div>
+                    {% else %}
+                    <a href="{{ url_for('practice_setup', subject_id=subject.id, category_id=child.id) }}" class="category-level-3-item">
+                        <i class="fas fa-play-circle"></i> {{ child.name }}
+                    </a>
                     {% endif %}
                 </div>
                 {% endfor %}

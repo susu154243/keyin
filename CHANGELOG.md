@@ -1,5 +1,80 @@
 # 刻印 (KeyIn) 变更日志
 
+## v0.8.1 - 2026-04-30
+**全量修复：10项 P0/P1/P2 问题**
+
+### P0 Bug 修复
+- 修复"下一题"按钮跳过队列 → 改为通过 /next 路由统一管理
+- 防止直接URL绕过队列 → chapter_practice_qid 增加队列校验
+- 旧路由 practice_category 重定向到 setup，避免混乱
+
+### P1 体验优化
+- 增加进度显示：进度条 + 已完成/剩余计数
+- 重做题标识：⚠️ 第X次作答 + 导航橙色标记
+- 考试错题自动加入 SM-2 复习计划
+
+### P2 完善
+- 会话丢失恢复：setup 页面显示"继续上次练习"按钮
+- 统计页面增加 SM-2 掌握度概览（已掌握/待复习/新题）
+- practice_setup 显示分类学习进度（已掌握数、待复习数）
+- 多选题部分正确判定 → 自动映射 quality=1（模糊）
+
+## v0.8.0 - 2026-04-30
+**SM-2 深度集成：队列调度 + 自动评分 + 五档复习策略**
+
+### 核心改进
+- 练习模式采用**会话内队列调度**：答对移出队列，答错放回队尾（最多5次重试）
+- **五档评分策略**：忘了(0)/模糊(1)/一般(2)/简单(3)/秒答(4)，每档对应不同的会话内处理和 SM-2 间隔
+- **跳过评分自动映射**：答对首次=简单(3)，答对重试=一般(2)，答错=模糊(1)
+- 新增**练习总结页**：展示正确率、顽固题、下次复习安排
+- 修复 `get_due_questions` 的 subject_id 硬编码问题
+- 新增 `is_question_mastered()` 和 `get_review_schedule()` 函数
+
+### 五档评分策略
+| 评分 | 会话内处理 | SM-2 间隔 | 下次复习 |
+|------|-----------|----------|--------|
+| 😭 忘了(0) | 重做，最多5次 | 1天 | 明天 |
+| 😕 模糊(1) | 重做1次 | 2天 | 2天后 |
+| 😐 一般(2) | 移出队列 | 4天 | 4天后 |
+| 😊 简单(3) | 移出队列 | 10天 | 10天后 |
+| 🤩 秒答(4) | 移出队列 | 30天 | 30天后 |
+
+### 新增路由
+- `GET /practice/<cat>/practice/next` - 从队列取下一题
+- `POST /practice/<cat>/practice/<qid>/skip` - 跳过评分，自动映射
+
+### 新增模板
+- `chapter_practice_summary.html` - 练习总结页（正确率/顽固题/复习安排）
+
+## v0.7.0 - 2026-04-30
+**章节练习模式选择：考试模式 + 练习模式 + 题量选择 + 题目导航**
+
+### 新增功能
+- 三级分类点击后进入「练习设置页」，可选择模式与题量
+- **考试模式**：全部题目一页显示，提交后显示成绩、逐题解析、正确率
+- **练习模式**：逐题作答，答完立即显示答案与解析，题干选项不隐藏
+- 两种模式均支持题目导航（题号按钮，颜色标识状态）
+- 题量选择：支持自定义题量 + 快捷按钮（10/20/30/50/全部）
+- 练习模式保留 SM-2 评分（答完题后评分，然后跳下一题）
+
+### 新增路由
+- `GET /subjects/<id>/practice/<cat_id>/setup` - 练习设置页
+- `GET /subjects/<id>/practice/<cat_id>/exam` - 考试模式答卷
+- `POST /subjects/<id>/practice/<cat_id>/exam/submit` - 提交考试
+- `GET /subjects/<id>/practice/<cat_id>/practice` - 练习模式起始
+- `GET /subjects/<id>/practice/<cat_id>/practice/<qid>` - 练习模式-指定题
+- `POST /subjects/<id>/practice/<cat_id>/practice/<qid>/answer` - 练习模式-提交答案
+- `POST /subjects/<id>/practice/<cat_id>/practice/<qid>/rate` - 练习模式-SM-2评分
+
+### 新增模板
+- `practice_setup.html` - 模式选择+题量选择
+- `chapter_exam.html` - 考试模式
+- `chapter_practice.html` - 练习模式
+
+### 修改
+- `practice.html` / `subject_detail.html`：三级分类链接改指向 setup 页
+- 原有 `show_question` / `practice_category` 路由保持不变
+
 ## v0.6.0 - 2026-04-29
 **代码质量全面修复 + 文档生成**
 

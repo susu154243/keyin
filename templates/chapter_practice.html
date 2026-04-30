@@ -1,0 +1,222 @@
+{% extends 'base.html' %}
+
+{% block title %}练习模式 - {{ category.name }}{% endblock %}
+
+{% block content %}
+<div class="practice-layout">
+    <!-- 主内容区 -->
+    <div class="practice-main">
+        <div class="practice-header-bar">
+            <a href="{{ url_for('practice_setup', subject_id=subject.id, category_id=category.id) }}" class="btn btn-outline-primary btn-sm">
+                <i class="fas fa-arrow-left"></i> 返回设置
+            </a>
+            <span class="practice-title-text">{{ category.name }}</span>
+            <!-- P1-4: 进度显示 -->
+            <span class="practice-counter">已完成 {{ completed_count }}/{{ total_count }} · 剩余 {{ remaining }} 题</span>
+        </div>
+
+        <div class="question-block">
+            <div class="q-header">
+                <span class="q-number">第 {{ queue_position }} 题</span>
+                {% if retry_count > 0 %}
+                <!-- P1-5: 重做题标识 -->
+                <span class="badge bg-warning"><i class="fas fa-redo-alt"></i> 第{{ retry_count + 1 }}次作答</span>
+                {% endif %}
+                {% if question.qtype_text %}
+                <span class="badge bg-info">{{ question.qtype_text }}</span>
+                {% endif %}
+                {% if question.difficulty and question.difficulty != '无' %}
+                <span class="badge bg-warning">{{ question.difficulty }}</span>
+                {% endif %}
+            </div>
+
+            <div class="q-stem">{{ question.stem | safe }}</div>
+
+            <!-- 未答题：显示表单 -->
+            {% if not result_msg %}
+            <form id="answerForm" action="{{ url_for('chapter_practice_answer', subject_id=subject.id, category_id=category.id, qid=question.id) }}" method="post">
+                <div class="q-options">
+                    {% for key, val in question.options.items() %}
+                    <div class="q-option">
+                        <label>
+                            {% if question.qtype_text == '多选题' %}
+                            <input type="checkbox" name="answer" value="{{ key }}">
+                            {% else %}
+                            <input type="radio" name="answer" value="{{ key }}" required>
+                            {% endif %}
+                            <span><strong>{{ key }}.</strong> {{ val | safe }}</span>
+                        </label>
+                    </div>
+                    {% endfor %}
+                </div>
+                <button type="submit" class="btn btn-primary mt-3"><i class="fas fa-paper-plane"></i> 提交答案</button>
+            </form>
+            {% endif %}
+
+            <!-- 已答题：显示结果 -->
+            {% if result_msg %}
+            <div class="q-options result-options">
+                {% for key, val in question.options.items() %}
+                {% set opt_is_correct = (key == question.answer) %}
+                {% set is_user_answer = (key in user_answer_list) if user_answer_list is defined else false %}
+                <div class="q-option {{ 'opt-correct' if opt_is_correct else ('opt-wrong' if is_user_answer else '') }}">
+                    <span><strong>{{ key }}.</strong> {{ val | safe }}</span>
+                    {% if opt_is_correct %}<span class="opt-badge correct">✅ 正确答案</span>{% endif %}
+                    {% if is_user_answer and not opt_is_correct %}<span class="opt-badge wrong">你的答案</span>{% endif %}
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- P2-10: 部分正确提示 -->
+            <div class="result-feedback {{ 'result-correct' if is_correct else ('result-partial' if is_partial else 'result-incorrect') }}">
+                {% if is_correct %}✅ 回答正确！{% elif is_partial %}⚠️ 部分正确。正确答案：<strong>{{ question.answer }}</strong>{% else %}❌ 回答错误。正确答案：<strong>{{ question.answer }}</strong>{% endif %}
+            </div>
+
+            {% if question.explanation %}
+            <div class="q-explanation">
+                <h5><i class="fas fa-lightbulb"></i> 解析</h5>
+                <div>{{ question.explanation | safe }}</div>
+            </div>
+            {% endif %}
+
+            <!-- SM-2 评分 -->
+            <div class="rating-section">
+                <p class="rating-title">你觉得这道题：</p>
+                <form action="{{ url_for('chapter_practice_rate', subject_id=subject.id, category_id=category.id, qid=question.id) }}" method="post" class="rating-form">
+                    <div class="rating-buttons">
+                        <button type="submit" name="quality" value="0" class="rating-btn rating-0">😭 忘了</button>
+                        <button type="submit" name="quality" value="1" class="rating-btn rating-1">😕 模糊</button>
+                        <button type="submit" name="quality" value="2" class="rating-btn rating-2">😐 一般</button>
+                        <button type="submit" name="quality" value="3" class="rating-btn rating-3">😊 简单</button>
+                        <button type="submit" name="quality" value="4" class="rating-btn rating-4">🤩 秒答</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- P0-1: 下一题通过 /next 路由（队列调度） -->
+            <div class="mt-3 text-center d-flex gap-2 justify-content-center flex-wrap">
+                <form action="{{ url_for('chapter_practice_skip', subject_id=subject.id, category_id=category.id, qid=question.id) }}" method="post">
+                    <button type="submit" class="btn btn-outline-secondary">
+                        <i class="fas fa-forward"></i> 跳过评分
+                    </button>
+                </form>
+                {% if remaining > 0 %}
+                <form action="{{ url_for('chapter_practice_next', subject_id=subject.id, category_id=category.id) }}" method="get">
+                    <button type="submit" class="btn btn-outline-primary">
+                        <i class="fas fa-step-forward"></i> 下一题 →
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- P2-6: 右侧导航带进度 -->
+    <div class="exam-nav">
+        <div class="exam-nav-title">题目导航</div>
+        <!-- P1-4: 进度条 -->
+        <div class="nav-progress">
+            <div class="nav-progress-bar" style="width: {{ (completed_count / total_count * 100)|round if total_count > 0 else 0 }}%;"></div>
+        </div>
+        <div class="nav-progress-text">{{ completed_count }}/{{ total_count }}</div>
+        <div class="exam-nav-grid" id="examNavGrid">
+            {% for qid in queue %}
+            {% set is_current = (qid == question.id) %}
+            {% set is_retry = retry_counts.get(qid, 0) > 0 if retry_counts is defined else false %}
+            <a href="{{ url_for('chapter_practice_qid', subject_id=subject.id, category_id=category.id, qid=qid) }}"
+               class="nav-dot {{ 'nav-current' if is_current else '' }} {{ 'nav-retry' if is_retry else '' }}"
+               title="第 {{ loop.index }} 题{{ ' (重试)' if is_retry else '' }}">
+                {{ loop.index }}
+            </a>
+            {% endfor %}
+        </div>
+        <div class="exam-nav-legend">
+            <span class="legend-item"><span class="legend-dot blue"></span>当前</span>
+            <span class="legend-item"><span class="legend-dot orange"></span>重试</span>
+            <span class="legend-item"><span class="legend-dot gray"></span>待做</span>
+        </div>
+        <a href="{{ url_for('subject_detail', subject_id=subject.id) }}" class="btn btn-outline-secondary btn-block mt-3">
+            <i class="fas fa-home"></i> 返回科目
+        </a>
+    </div>
+</div>
+
+<style>
+.practice-layout { display: flex; gap: 1.5rem; align-items: flex-start; }
+@media (max-width: 992px) {
+    .practice-layout { flex-direction: column; }
+    .exam-nav { order: -1; position: sticky; top: 60px; z-index: 100; }
+}
+.practice-main { flex: 1; min-width: 0; }
+.practice-header-bar { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.practice-title-text { font-weight: 600; font-size: 1.1rem; }
+.practice-counter { font-size: 0.85rem; color: var(--gray-600); background: var(--gray-200); padding: 2px 8px; border-radius: 10px; }
+
+.question-block { background: white; border-radius: var(--border-radius); padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+.q-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+.q-number { font-weight: 700; color: var(--primary-color); }
+.q-stem { margin-bottom: 1rem; line-height: 1.8; }
+.q-option { margin-bottom: 0.5rem; padding: 0.5rem 0.75rem; border-radius: 6px; transition: var(--transition); }
+.q-option:hover { background: var(--gray-100); }
+.q-option input { margin-right: 0.5rem; }
+
+.result-options .q-option { pointer-events: none; }
+.opt-correct { background: rgba(46,196,182,0.1); border-left: 3px solid var(--success-color); }
+.opt-wrong { background: rgba(230,57,70,0.1); border-left: 3px solid var(--danger-color); }
+.opt-badge { font-size: 0.75rem; margin-left: 0.5rem; }
+.opt-badge.correct { color: var(--success-color); }
+.opt-badge.wrong { color: var(--danger-color); }
+
+.result-feedback { padding: 0.75rem 1rem; border-radius: var(--border-radius); margin: 1rem 0; }
+.result-correct { background: rgba(46,196,182,0.1); color: var(--success-color); }
+.result-partial { background: rgba(255,183,3,0.1); color: #cc8800; }
+.result-incorrect { background: rgba(230,57,70,0.1); color: var(--danger-color); }
+
+.q-explanation { background: #f0f7ff; border-left: 3px solid var(--primary-color); padding: 1rem; margin-top: 1rem; border-radius: 0 6px 6px 0; }
+.q-explanation h5 { color: var(--primary-color); margin-bottom: 0.5rem; }
+
+.rating-section { margin-top: 1.5rem; padding: 1rem; background: var(--gray-100); border-radius: var(--border-radius); }
+.rating-title { margin: 0 0 0.75rem; font-weight: 600; }
+.rating-buttons { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
+.rating-btn { padding: 0.5rem 1rem; border: 2px solid var(--gray-300); border-radius: 6px; background: white; cursor: pointer; transition: var(--transition); font-size: 0.9rem; }
+.rating-btn:hover { transform: translateY(-2px); box-shadow: var(--box-shadow); }
+.rating-0:hover { border-color: #e63946; background: #ffe5e8; }
+.rating-1:hover { border-color: #f4a261; background: #fff3e0; }
+.rating-2:hover { border-color: #e9c46a; background: #fffde7; }
+.rating-3:hover { border-color: #2ec4b6; background: #e0f7f5; }
+.rating-4:hover { border-color: #4361ee; background: #e8edff; }
+
+/* 导航 */
+.exam-nav {
+    width: 200px; flex-shrink: 0; position: sticky; top: 80px;
+    background: white; border-radius: var(--border-radius); padding: 1rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.exam-nav-title { font-weight: 600; margin-bottom: 0.75rem; text-align: center; }
+
+/* P1-4: 进度条 */
+.nav-progress { height: 6px; background: var(--gray-200); border-radius: 3px; overflow: hidden; margin-bottom: 4px; }
+.nav-progress-bar { height: 100%; background: var(--success-color); border-radius: 3px; transition: width 0.3s; }
+.nav-progress-text { text-align: center; font-size: 0.75rem; color: var(--gray-600); margin-bottom: 0.5rem; }
+
+.exam-nav-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.nav-dot {
+    width: 32px; height: 32px; border: 1px solid var(--gray-300); border-radius: 6px;
+    background: white; font-size: 0.75rem; cursor: pointer; display: flex;
+    align-items: center; justify-content: center; text-decoration: none; color: var(--gray-700);
+    transition: var(--transition);
+}
+.nav-dot:hover { background: var(--gray-200); }
+.nav-dot.nav-current { background: var(--primary-color); color: white; border-color: var(--primary-color); font-weight: 700; }
+.nav-dot.nav-retry { border-color: #f4a261; background: #fff3e0; }
+
+.exam-nav-legend { display: flex; gap: 0.75rem; margin-top: 0.75rem; font-size: 0.75rem; color: var(--gray-600); justify-content: center; flex-wrap: wrap; }
+.legend-dot { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: middle; }
+.legend-dot.gray { background: var(--gray-300); }
+.legend-dot.blue { background: var(--primary-color); }
+.legend-dot.orange { background: #f4a261; }
+
+.btn-block { display: block; width: 100%; }
+</style>
+{% endblock %}

@@ -330,14 +330,17 @@ def get_questions_by_subject(subject_id, status=1, page=1, per_page=20, search='
 
 def create_question(data):
     """创建题目"""
+    import uuid
     conn = get_db()
     cur = conn.cursor()
+    qid = data.get('id') or str(uuid.uuid4())[:8]
     cur.execute("""
         INSERT INTO questions (
-            stem, options, answer, explanation, qtype, difficulty,
+            id, stem, options, answer, explanation, qtype, difficulty,
             subject_id, category_id, is_real_exam, exam_year, source, status, qtype_text
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
     """, (
+        qid,
         data.get('stem'),
         data.get('options', '{}'),
         data.get('answer'),
@@ -565,7 +568,7 @@ def sm2_schedule(quality, ease_factor, interval, repetitions):
     }
 
 
-def get_due_questions(user_id, category_id=None, limit=20):
+def get_due_questions(user_id, category_id=None, subject_id=None, limit=20):
     """获取到期需要复习的题目"""
     from datetime import datetime
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -582,15 +585,21 @@ def get_due_questions(user_id, category_id=None, limit=20):
             ORDER BY rs.next_review ASC
             LIMIT ?
         """, (user_id, category_id, now, limit))
-    else:
-        # 注意：subject_id 从分类推导（取该用户第一个科目），不再用 category_id 冒充 subject_id
+    elif subject_id:
         cur.execute("""
             SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions
             FROM questions q
             JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
-            WHERE q.subject_id = (
-                SELECT subject_id FROM categories ORDER BY id LIMIT 1
-            ) AND q.status = 1 AND rs.next_review <= ?
+            WHERE q.subject_id = ? AND q.status = 1 AND rs.next_review <= ?
+            ORDER BY rs.next_review ASC
+            LIMIT ?
+        """, (user_id, subject_id, now, limit))
+    else:
+        cur.execute("""
+            SELECT q.*, rs.ease_factor, rs.interval, rs.repetitions
+            FROM questions q
+            JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
+            WHERE q.status = 1 AND rs.next_review <= ?
             ORDER BY rs.next_review ASC
             LIMIT ?
         """, (user_id, now, limit))
@@ -657,6 +666,34 @@ def get_review_progress(user_id, subject_id=None, category_id=None):
     
     conn.close()
     return {"total": total, "reviewed": reviewed, "due": due}
+
+
+def is_question_mastered(user_id, question_id):
+    """判断题目是否已掌握：repetitions >= 3 且 ease_factor >= 2.5 且 interval >= 15"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT repetitions, ease_factor, interval FROM review_schedule
+        WHERE user_id = ? AND question_id = ?
+    """, (user_id, question_id))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return False
+    return row['repetitions'] >= 3 and row['ease_factor'] >= 2.5 and row['interval'] >= 15
+
+
+def get_review_schedule(user_id, question_id):
+    """获取题目的复习计划记录"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM review_schedule
+        WHERE user_id = ? AND question_id = ?
+    """, (user_id, question_id))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
 
 
 def update_review_schedule(user_id, question_id, subject_id, quality):
@@ -934,8 +971,9 @@ def get_next_question_id(subject_id, current_qid):
     cur = conn.cursor()
     cur.execute("""
         SELECT id FROM questions
-        WHERE subject_id = ? AND id > ? AND status = 1
-        ORDER BY id LIMIT 1
+        WHERE subject_id = ? AND status = 1
+          AND ROWID > (SELECT ROWID FROM questions WHERE id = ?)
+        ORDER BY ROWID LIMIT 1
     """, (subject_id, current_qid))
     row = cur.fetchone()
     conn.close()
@@ -981,8 +1019,11 @@ def get_question_position_in_category(category_id, qid):
     """获取题目在分类中的位置"""
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM questions WHERE category_id = ? AND id <= ? AND status = 1",
-               (category_id, qid))
+    cur.execute("""
+        SELECT COUNT(*) FROM questions
+        WHERE category_id = ? AND status = 1
+          AND ROWID <= (SELECT ROWID FROM questions WHERE id = ?)
+    """, (category_id, qid))
     position = cur.fetchone()[0]
     conn.close()
     return position

@@ -21,6 +21,22 @@
     <div class="stat-box"><div class="stat-icon">⏱️</div><div class="stat-value" id="total-minutes">-</div><div class="stat-label">学习分钟</div></div>
 </div>
 
+<!-- P2-7: SM-2 掌握度概览 -->
+<div class="card mb-4">
+    <h2 class="card-title"><i class="fas fa-brain"></i> Anki 复习状态</h2>
+    <div class="sm2-overview" id="sm2-overview">
+        <div class="sm2-stat"><span class="sm2-label">总题目</span><span class="sm2-value" id="sm2-total">-</span></div>
+        <div class="sm2-stat"><span class="sm2-label">已学习</span><span class="sm2-value" id="sm2-reviewed">-</span></div>
+        <div class="sm2-stat"><span class="sm2-label" style="color:var(--success-color);">已掌握</span><span class="sm2-value" id="sm2-mastered" style="color:var(--success-color);">-</span></div>
+        <div class="sm2-stat"><span class="sm2-label" style="color:var(--warning-color);">待复习</span><span class="sm2-value" id="sm2-due" style="color:var(--warning-color);">-</span></div>
+        <div class="sm2-stat"><span class="sm2-label">新题目</span><span class="sm2-value" id="sm2-new">-</span></div>
+    </div>
+    <div class="sm2-progress-bar-outer mt-3">
+        <div class="sm2-progress-bar" id="sm2-progress" style="width:0%;"></div>
+    </div>
+    <div class="sm2-progress-text" id="sm2-progress-text">-</div>
+</div>
+
 <!-- 热力图 -->
 <div class="card mb-4">
     <h2 class="card-title"><i class="fas fa-calendar-alt"></i> 学习热力图（近 90 天）</h2>
@@ -64,7 +80,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('accuracy-7d').textContent = s.accuracy_7d + '%';
     document.getElementById('total-reviewed').textContent = s.total_reviewed || '0';
     document.getElementById('total-minutes').textContent = s.total_minutes || '0';
-    
+
+    // P2-7: SM-2 掌握度
+    const sm2 = data.sm2_summary;
+    if (sm2) {
+        document.getElementById('sm2-total').textContent = sm2.total;
+        document.getElementById('sm2-reviewed').textContent = sm2.reviewed;
+        document.getElementById('sm2-mastered').textContent = sm2.mastered;
+        document.getElementById('sm2-due').textContent = sm2.due;
+        document.getElementById('sm2-new').textContent = sm2.new;
+        const pct = sm2.total > 0 ? Math.round(sm2.mastered / sm2.total * 100) : 0;
+        document.getElementById('sm2-progress').style.width = pct + '%';
+        document.getElementById('sm2-progress-text').textContent = `掌握率 ${pct}%（${sm2.mastered}/${sm2.total}）`;
+    }
+
     // 热力图
     renderHeatmap(data.heatmap);
     
@@ -226,5 +255,15 @@ function renderRetentionChart(retentionData) {
     .mastery-bar { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
     .mastery-value { min-width: 120px; text-align: right; font-weight: 600; font-size: 0.9rem; }
     .badge { display: inline-block; padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius: 50rem; background: var(--gray-300); color: var(--gray-700); }
+
+    /* P2-7: SM-2 概览 */
+    .sm2-overview { display: grid; grid-template-columns: repeat(5, 1fr); gap: 1rem; }
+    @media (max-width: 576px) { .sm2-overview { grid-template-columns: repeat(3, 1fr); } }
+    .sm2-stat { text-align: center; padding: 1rem; background: var(--gray-100); border-radius: var(--border-radius); }
+    .sm2-label { display: block; font-size: 0.85rem; color: var(--gray-600); margin-bottom: 0.25rem; }
+    .sm2-value { display: block; font-size: 1.5rem; font-weight: 700; }
+    .sm2-progress-bar-outer { height: 10px; background: var(--gray-200); border-radius: 5px; overflow: hidden; }
+    .sm2-progress-bar { height: 100%; background: var(--success-color); border-radius: 5px; transition: width 0.3s; }
+    .sm2-progress-text { text-align: center; font-size: 0.85rem; color: var(--gray-600); margin-top: 0.5rem; }
 </style>
 {% endblock %}

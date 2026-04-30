@@ -1,0 +1,175 @@
+{% extends 'base.html' %}
+
+{% block title %}练习设置 - {{ category.name }}{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="{{ url_for('practice', subject_id=subject.id) }}" class="btn btn-outline-primary btn-sm">
+        <i class="fas fa-arrow-left"></i> 返回章节练习
+    </a>
+</div>
+
+<div class="card">
+    <h2 class="card-title"><i class="fas fa-sliders-h"></i> 练习设置</h2>
+    <p class="text-muted mb-2">{{ category.name }} · 共 {{ total }} 题</p>
+
+    <!-- P2-9: 分类学习进度 -->
+    {% if reviewed_in_cat and reviewed_in_cat > 0 %}
+    <div class="category-progress mb-4">
+        <div class="progress-header">
+            <span><i class="fas fa-chart-line"></i> 学习进度</span>
+            <span>{{ reviewed_in_cat }}/{{ total }} 题已学习</span>
+        </div>
+        <div class="progress-bar-outer">
+            <div class="progress-bar-inner" style="width: {{ (reviewed_in_cat / total * 100)|round }}%;"></div>
+        </div>
+        <div class="progress-stats">
+            {% if mastered_in_cat and mastered_in_cat > 0 %}
+            <span class="stat-mastered"><i class="fas fa-check-circle"></i> 已掌握 {{ mastered_in_cat }} 题</span>
+            {% endif %}
+            {% if due_review and due_review > 0 %}
+            <span class="stat-due"><i class="fas fa-clock"></i> 待复习 {{ due_review }} 题</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- P2-6: 继续上次练习 -->
+    {% if session.get('practice') and session['practice'].get('category_id') == category.id %}
+    <div class="resume-alert mb-4">
+        <div class="alert alert-warning d-flex align-items-center justify-content-between">
+            <div>
+                <i class="fas fa-redo-alt"></i>
+                发现未完成的练习（{{ session['practice'].get('queue') | length }} 题剩余）
+            </div>
+            <a href="{{ url_for('chapter_practice_next', subject_id=subject.id, category_id=category.id) }}" class="btn btn-sm btn-warning">
+                继续练习
+            </a>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 模式选择 -->
+    <div class="mode-select-grid mb-4">
+        <!-- 考试模式 -->
+        <div class="mode-card" id="modeExam" onclick="selectMode('exam')">
+            <div class="mode-card-icon"><i class="fas fa-file-alt"></i></div>
+            <h3>考试模式</h3>
+            <p>完成所有题目后提交试卷，查看成绩与解析，统计正确率</p>
+            <div class="mode-card-check" id="examCheck"><i class="fas fa-check-circle"></i></div>
+        </div>
+
+        <!-- 练习模式 -->
+        <div class="mode-card" id="modePractice" onclick="selectMode('practice')">
+            <div class="mode-card-icon"><i class="fas fa-pen-fancy"></i></div>
+            <h3>练习模式</h3>
+            <p>每答完一题立即显示答案和解析，结合评分与 Anki 算法安排复习</p>
+            <div class="mode-card-check" id="practiceCheck"><i class="fas fa-check-circle"></i></div>
+        </div>
+    </div>
+
+    <!-- 题量选择 -->
+    <div class="question-count-section mb-4">
+        <label class="form-label fw-bold"><i class="fas fa-hashtag"></i> 选择题量</label>
+        <div class="d-flex align-items-center gap-3">
+            <input type="number" id="questionCount" class="form-control" min="1" max="{{ total }}" value="{{ total }}" style="max-width: 120px;">
+            <span class="text-muted">/ {{ total }} 题</span>
+        </div>
+        <div class="quick-select mt-2">
+            <button class="btn btn-sm btn-outline-secondary quick-count" data-count="10">10题</button>
+            <button class="btn btn-sm btn-outline-secondary quick-count" data-count="20">20题</button>
+            <button class="btn btn-sm btn-outline-secondary quick-count" data-count="30">30题</button>
+            <button class="btn btn-sm btn-outline-secondary quick-count" data-count="50">50题</button>
+            <button class="btn btn-sm btn-outline-secondary quick-count" data-count="{{ total }}">全部</button>
+        </div>
+    </div>
+
+    <!-- 开始按钮 -->
+    <div class="text-center">
+        <button id="startBtn" class="btn btn-primary btn-lg" onclick="startPractice()" disabled>
+            <i class="fas fa-play-circle"></i> 开始
+        </button>
+    </div>
+</div>
+
+<script>
+let selectedMode = null;
+
+function selectMode(mode) {
+    selectedMode = mode;
+    document.getElementById('modeExam').classList.toggle('selected', mode === 'exam');
+    document.getElementById('modePractice').classList.toggle('selected', mode === 'practice');
+    document.getElementById('examCheck').style.display = mode === 'exam' ? 'block' : 'none';
+    document.getElementById('practiceCheck').style.display = mode === 'practice' ? 'block' : 'none';
+    document.getElementById('startBtn').disabled = false;
+}
+
+function startPractice() {
+    const count = document.getElementById('questionCount').value;
+    if (!selectedMode) { alert('请选择练习模式'); return; }
+    if (!count || count < 1) { alert('题量至少为1'); return; }
+    const url = selectedMode === 'exam'
+        ? '{{ url_for("chapter_exam", subject_id=subject.id, category_id=category.id) }}?count=' + count
+        : '{{ url_for("chapter_practice_start", subject_id=subject.id, category_id=category.id) }}?count=' + count;
+    window.location.href = url;
+}
+
+// Quick select buttons
+document.querySelectorAll('.quick-count').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.getElementById('questionCount').value = this.dataset.count;
+    });
+});
+</script>
+
+<style>
+.mode-select-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+}
+@media (max-width: 576px) {
+    .mode-select-grid { grid-template-columns: 1fr; }
+}
+.mode-card {
+    position: relative;
+    background: var(--gray-100);
+    border: 2px solid transparent;
+    border-radius: var(--border-radius);
+    padding: 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.mode-card:hover { background: white; box-shadow: var(--box-shadow); }
+.mode-card.selected {
+    border-color: var(--primary-color);
+    background: white;
+    box-shadow: var(--box-shadow);
+}
+.mode-card-icon { font-size: 2.5rem; color: var(--primary-color); margin-bottom: 0.75rem; }
+.mode-card h3 { margin-bottom: 0.5rem; font-size: 1.1rem; }
+.mode-card p { color: var(--gray-600); font-size: 0.85rem; margin: 0; }
+.mode-card-check {
+    display: none;
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    color: var(--primary-color);
+    font-size: 1.5rem;
+}
+.quick-select { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+/* P2-9: 分类进度 */
+.category-progress { background: var(--gray-100); padding: 1rem; border-radius: var(--border-radius); }
+.progress-header { display: flex; justify-content: space-between; font-size: 0.9rem; margin-bottom: 0.5rem; }
+.progress-bar-outer { height: 10px; background: var(--gray-300); border-radius: 5px; overflow: hidden; }
+.progress-bar-inner { height: 100%; background: var(--success-color); border-radius: 5px; transition: width 0.3s; }
+.progress-stats { display: flex; gap: 1rem; margin-top: 0.5rem; font-size: 0.8rem; }
+.stat-mastered { color: var(--success-color); }
+.stat-due { color: var(--warning-color); }
+
+/* P2-6: 继续练习提醒 */
+.resume-alert .alert { margin-bottom: 0; padding: 0.75rem 1rem; }
+</style>
+{% endblock %}
