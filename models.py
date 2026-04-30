@@ -566,9 +566,9 @@ def sm2_schedule(quality, ease_factor, interval, repetitions):
     new_ease = max(1.3, new_ease)
     
     if quality < 2:
-        # 失败：重置
+        # 失败：重置（interval=0 表示立即复习）
         new_reps = 0
-        new_interval = 1
+        new_interval = 0 if quality == 0 else 1
     else:
         new_reps = repetitions + 1
         if new_reps == 1:
@@ -712,8 +712,8 @@ def get_review_schedule(user_id, question_id):
 
 
 def update_review_schedule(user_id, question_id, subject_id, quality):
-    """根据评分更新复习计划"""
-    from datetime import datetime, timedelta
+    """根据评分更新复习计划（下次复习从次日零点开始）"""
+    from datetime import datetime, timedelta, date
     
     conn = get_db()
     cur = conn.cursor()
@@ -738,7 +738,13 @@ def update_review_schedule(user_id, question_id, subject_id, quality):
     result = sm2_schedule(quality, ease, interval, reps)
     
     now = datetime.now()
-    next_review = now + timedelta(days=result['interval'])
+    # interval=0 → 立即复习（当前时间）；interval≥1 → 次日零点 + (interval-1)天
+    if result['interval'] == 0:
+        next_review = now
+    else:
+        next_review = datetime.combine(date.today() + timedelta(days=1), datetime.min.time())
+        if result['interval'] > 1:
+            next_review += timedelta(days=result['interval'] - 1)
     
     if existing:
         cur.execute("""
