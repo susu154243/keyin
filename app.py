@@ -13,15 +13,20 @@ from datetime import datetime
 
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, session, jsonify, abort)
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 from models import (
     authenticate_user, get_user_by_id, get_user_subjects,
     get_question, get_user_wrong_questions, get_user_favorites,
     toggle_favorite, save_answer, get_all_subjects, get_leaf_categories,
     get_categories_tree, update_user_last_login,
+    set_user_session_token, clear_user_session_token,
+    get_questions_by_category,
     get_review_progress,
     update_review_schedule, get_review_schedule, is_question_mastered, get_db,
     get_due_today, get_study_progress, infer_quality, get_question_attempt_stats,
+    delete_review_schedule,
     get_stats_summary, get_daily_trend, get_heatmap_data,
     get_category_mastery, get_retention_curve,
     # 新增封装函数
@@ -40,12 +45,36 @@ from admin import admin_bp
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SECURE'] = True
+
+# 速率限制（内存存储，单机足够）
+# 关键：从 X-Forwarded-For 获取真实 IP（Nginx 反代后 remote_address 是 127.0.0.1）
+def _get_real_ip():
+    return request.headers.get('X-Real-IP', get_remote_address())
+
+limiter = Limiter(
+    app=app,
+    key_func=_get_real_ip,
+    storage_uri="memory://",
+)
 
 # 注册管理端 Blueprint
 app.register_blueprint(admin_bp)
 
 
 # ==================== 辅助函数 ====================
+
+
+def _check_subject_permission(user, subject_id):
+    """检查用户是否有科目权限。返回 True 或有权限的 subjects 列表。"""
+    if user['role'] == 'admin':
+        return True
+    subjects = get_user_subjects(user['id'])
+    allowed_ids = [s['id'] for s in subjects]
+    if subject_id not in allowed_ids:
+        return False
+    return True
 
 
 
@@ -67,16 +96,21 @@ def parse_options(options_str):
 # ==================== 认证路由 ====================
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("5 per 15 minutes")
 def login():
     if request.method == 'POST':
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         user = authenticate_user(username, password)
         if user:
+            import secrets
+            token = secrets.token_hex(32)
             session['user_id'] = user['id']
             session['username'] = user['username']
             session['role'] = user['role']
+            session['session_token'] = token
             update_user_last_login(user['id'])
+            set_user_session_token(user['id'], token)
             next_url = request.args.get('next', url_for('index'))
             return redirect(next_url)
         flash('用户名或密码错误', 'error')
@@ -110,8 +144,17 @@ def register():
 
 @app.route('/logout')
 def logout():
+    user_id = session.get('user_id')
+    if user_id:
+        clear_user_session_token(user_id)
     session.clear()
     return redirect(url_for('login'))
+
+
+@app.route('/robots.txt')
+def robots_txt():
+    from flask import send_from_directory
+    return send_from_directory(app.static_folder, 'robots.txt')
 
 
 # ==================== 首页（科目选择） ====================
@@ -149,7 +192,7 @@ def subject_detail(subject_id):
             flash('您没有访问该科目的权限', 'error')
             return redirect(url_for('index'))
     else:
-        subjects = get_all_subjects()  # 修复：管理员也需要 subjects 变量
+        subjects = []
     
     subject = get_subject_by_id(subject_id)
     if not subject:
@@ -309,17 +352,34 @@ def _get_chapter_questions(subject_id, category_id, user_id, count=None):
     return result, rows
 
 
+def _get_all_chapter_questions(category_id, count=None):
+    """获取分类下全部题目（考试模式用），返回 (dict_list, raw_list)"""
+    rows = get_questions_by_category(category_id)
+    if count and count > 0 and count < len(rows):
+        rows = rows[:count]
+    result = []
+    for r in rows:
+        q = serialize_row(r)
+        q['options'] = parse_options(q.get('options', '{}'))
+        result.append(q)
+    return result, rows
+
+
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>/exam')
 @login_required
 def chapter_exam(subject_id, category_id):
-    """考试模式：显示全部题目"""
+    """考试模式：显示分类全部题目"""
+    user = get_current_user()
+    if not _check_subject_permission(user, subject_id):
+        flash('您没有访问该科目的权限', 'error')
+        return redirect(url_for('index'))
     cat = get_category(category_id)
     if not cat or cat['subject_id'] != subject_id:
         abort(404)
     count = request.args.get('count', type=int)
-    questions, _ = _get_chapter_questions(subject_id, category_id, session['user_id'], count=count)
+    questions, _ = _get_all_chapter_questions(category_id, count=count)
     if not questions:
-        flash('该分类下暂无新题，请进入复习模式', 'info')
+        flash('该分类下暂无题目', 'info')
         return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
     subject = get_subject_by_id(subject_id)
     return render_template('chapter_exam.html', questions=questions, subject=subject, category=cat)
@@ -329,8 +389,11 @@ def chapter_exam(subject_id, category_id):
 @login_required
 def chapter_exam_submit(subject_id, category_id):
     """提交考试模式试卷"""
+    user = get_current_user()
+    if not _check_subject_permission(user, subject_id):
+        return jsonify({'success': False, 'error': '无权限'}), 403
     count = request.args.get('count', type=int)
-    _, raw = _get_chapter_questions(subject_id, category_id, session['user_id'], count=count)
+    _, raw = _get_all_chapter_questions(category_id, count=count)
     questions = []
     for r in raw:
         q = serialize_row(r)
@@ -376,6 +439,10 @@ def chapter_exam_submit(subject_id, category_id):
 @login_required
 def chapter_practice_start(subject_id, category_id):
     """练习模式起始：初始化队列到 session"""
+    user = get_current_user()
+    if not _check_subject_permission(user, subject_id):
+        flash('您没有访问该科目的权限', 'error')
+        return redirect(url_for('index'))
     cat = get_category(category_id)
     if not cat or cat['subject_id'] != subject_id:
         abort(404)
@@ -449,13 +516,10 @@ def chapter_practice_qid(subject_id, category_id, qid):
     answer_data = p.get('answered', {}).get(qid, {})
     retry_count = p.get('retry_count', {}).get(qid, 0)
 
-    # P1-4: 进度数据
+    # P1-4: 进度数据（基于已答题数，而非队列减少）
     answered_count = len(p.get('answered', {}))
-    answered_unique = set()
-    for aqid in p.get('answered', {}):
-        if aqid not in p.get('stubborn', []):
-            answered_unique.add(aqid)
-    remaining = len(queue)
+    answered_unique = set(p.get('answered', {}).keys()) - set(p.get('stubborn', []))
+    remaining = initial_count - len(answered_unique)
 
     return render_template('chapter_practice.html',
                           question=question,
@@ -469,8 +533,8 @@ def chapter_practice_qid(subject_id, category_id, qid):
                           retry_count=retry_count,
                           retry_counts=p.get('retry_count', {}),
                           answered_count=answered_count,
-                          remaining=remaining,
-                          completed_count=initial_count - remaining)
+                          remaining=remaining if remaining > 0 else 0,
+                          completed_count=len(answered_unique))
 
 
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>/practice/<qid>/answer', methods=['POST'])
@@ -569,8 +633,8 @@ def chapter_practice_answer(subject_id, category_id, qid):
                           retry_count=p.get('retry_count', {}).get(qid, 0),
                           retry_counts=p.get('retry_count', {}),
                           answered_count=len(answered),
-                          remaining=len(queue),
-                          completed_count=p.get('initial_count', 0) - len(queue))
+                          remaining=p.get('initial_count', 0) - len(set(answered.keys()) - set(p.get('stubborn', []))),
+                          completed_count=len(set(answered.keys()) - set(p.get('stubborn', []))))
 
 
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>/practice/<qid>/rate', methods=['POST'])
@@ -948,15 +1012,7 @@ def mastered(subject_id, category_id):
 @login_required
 def unmaster_question(subject_id, category_id, qid):
     """取消掌握：删除 review_schedule 记录，题目回到新题池"""
-    from models import get_db
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        'DELETE FROM review_schedule WHERE user_id = ? AND question_id = ?',
-        (session['user_id'], qid)
-    )
-    conn.commit()
-    conn.close()
+    delete_review_schedule(session['user_id'], qid)
     flash('已取消掌握，题目回到练习池', 'success')
     return redirect(url_for('mastered', subject_id=subject_id, category_id=category_id))
 
@@ -1052,6 +1108,11 @@ def show_history_old():
 
 
 # ==================== 错误处理 ====================
+
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    return render_template('error.html', error_code=429,
+                          error_message="操作太频繁，请稍后再试"), 429
 
 @app.errorhandler(404)
 def page_not_found(e):

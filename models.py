@@ -128,6 +128,38 @@ def update_user_last_login(user_id):
     conn.close()
 
 
+def set_user_session_token(user_id, token):
+    """设置用户 session token（单设备登录）"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET session_token = ? WHERE id = ?", (token, user_id))
+    conn.commit()
+    conn.close()
+
+
+def clear_user_session_token(user_id):
+    """清除用户 session token"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET session_token = NULL WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def verify_session_token(user_id, token):
+    """验证 session token 是否匹配"""
+    if not token:
+        return False
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT session_token FROM users WHERE id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return False
+    return row[0] == token
+
+
 # ==================== 科目相关 ====================
 
 def get_all_subjects():
@@ -771,6 +803,18 @@ def update_review_schedule(user_id, question_id, subject_id, quality):
     return result
 
 
+def delete_review_schedule(user_id, question_id):
+    """删除复习计划记录（取消掌握）"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        'DELETE FROM review_schedule WHERE user_id = ? AND question_id = ?',
+        (user_id, question_id)
+    )
+    conn.commit()
+    conn.close()
+
+
 def get_due_today(user_id, category_id):
     """获取今日待复习的题目（next_review <= now）"""
     from datetime import datetime
@@ -832,11 +876,25 @@ def get_study_progress(user_id, category_id):
         JOIN questions q ON q.id = rs.question_id
         WHERE rs.user_id = ? AND q.category_id = ?
     """, (user_id, category_id))
-    records = cur.fetchall()
+    records = [dict(r) for r in cur.fetchall()]
 
-    dist = {'忘了': 0, '模糊': 0, '一般': 0, '简单': 0, '秒答': 0}
+    # 统计已答题总数（含未进入复习计划的）
+    cur.execute("""
+        SELECT COUNT(DISTINCT h.question_id) FROM history h
+        JOIN questions q ON q.id = h.question_id
+        WHERE h.user_id = ? AND q.category_id = ?
+    """, (user_id, category_id))
+    answered_total = cur.fetchone()[0]
+
+    # 已评分 = review_schedule 中有有效 last_quality 的记录
+    # 未评分 = 答过题但 review_schedule 中 last_quality 为 NULL
+    rated_count = sum(1 for r in records if r.get('last_quality') is not None)
+    unrated_count = answered_total - rated_count
+
+    dist = {'忘了': 0, '模糊': 0, '一般': 0, '简单': 0, '秒答': 0, '未评分': 0}
     for r in records:
         dist[infer_quality(r)] += 1
+    dist['未评分'] = max(0, unrated_count)
 
     conn.close()
     return {
@@ -881,21 +939,34 @@ def get_question_attempt_stats(user_id, category_id):
     for r in rows:
         row = dict(r)
         row['inferred_quality'] = infer_quality(row) if row['repetitions'] is not None else None
-        # 下次复习时间描述
+        # 下次复习时间描述（增强：显示小时级倒计时）
         if row['next_review']:
             from datetime import datetime as dt
             next_rev = dt.strptime(row['next_review'], '%Y-%m-%d %H:%M:%S')
-            diff = (next_rev - dt.now()).days
-            if diff < 0:
-                row['next_review_label'] = '已过期'
-            elif diff == 0:
-                row['next_review_label'] = '今天'
-            elif diff == 1:
-                row['next_review_label'] = '明天'
-            elif diff < 7:
-                row['next_review_label'] = f'{diff}天后'
+            now = dt.now()
+            diff_seconds = (next_rev - now).total_seconds()
+            diff_days = (next_rev - now).days
+            if diff_seconds < 0:
+                # 已过期
+                if diff_seconds > -86400:
+                    hours_ago = int(abs(diff_seconds) / 3600)
+                    row['next_review_label'] = f'已过期 {hours_ago}h' if hours_ago > 0 else '已过期'
+                else:
+                    row['next_review_label'] = f'{abs(diff_days)}天前'
+            elif diff_seconds < 3600:
+                # 1小时内到期
+                mins = int(diff_seconds / 60)
+                row['next_review_label'] = f'{mins}分钟后可复习'
+            elif diff_seconds < 86400:
+                # 今天到期
+                hours = int(diff_seconds / 3600)
+                row['next_review_label'] = f'{hours}小时后可复习'
+            elif diff_days == 1:
+                row['next_review_label'] = '明天可复习'
+            elif diff_days < 7:
+                row['next_review_label'] = f'{diff_days}天后可复习'
             else:
-                row['next_review_label'] = f'{diff}天后'
+                row['next_review_label'] = f'{diff_days}天后可复习'
         else:
             row['next_review_label'] = '未开始'
         results.append(row)
@@ -906,16 +977,21 @@ def infer_quality(record):
     """根据SM-2记录推断上次评分倾向
     
     优先读取 last_quality（原始评分值），旧记录兜底推断。
+    兼容 dict 和 sqlite3.Row 两种类型。
     """
     quality_map = {0: '忘了', 1: '模糊', 2: '一般', 3: '简单', 4: '秒答'}
     
-    # 新记录：直接读取 last_quality
-    if isinstance(record, dict) and record.get('last_quality') is not None:
-        return quality_map.get(record['last_quality'], '一般')
+    # 直接读取 last_quality（兼容 dict 和 sqlite3.Row）
+    try:
+        data = dict(record)
+    except (TypeError, ValueError):
+        data = {}
+    last_quality = data.get('last_quality')
+    if last_quality is not None:
+        return quality_map.get(last_quality, '一般')
     
-    # 旧记录（last_quality 为 NULL）：兜底推断
-    reps = record['repetitions']
-    ease = record['ease_factor']
+    # 旧记录（last_quality 为 NULL）：根据 reps 兜底推断
+    reps = data.get('repetitions', 0)
     if reps >= 3:
         return '秒答'
     elif reps >= 2:

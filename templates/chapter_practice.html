@@ -11,6 +11,10 @@
                 <i class="fas fa-arrow-left"></i> 返回学习设置
             </a>
             <span class="practice-title-text">{{ category.name }}</span>
+            <!-- 今日复习标识 -->
+            {% if session.get('practice', {}).get('is_today_review') %}
+            <span class="badge bg-success"><i class="fas fa-calendar-day"></i> 今日复习</span>
+            {% endif %}
             <!-- P1-4: 进度显示 -->
             <span class="practice-counter">已完成 {{ completed_count }}/{{ total_count }} · 剩余 {{ remaining }} 题</span>
         </div>

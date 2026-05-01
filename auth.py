@@ -4,15 +4,20 @@
 """
 from functools import wraps
 from flask import session, redirect, url_for, flash, abort, request
-from models import get_user_by_id, get_user_subjects
+from models import get_user_by_id, get_user_subjects, verify_session_token
 
 
 def login_required(f):
-    """需要登录"""
+    """需要登录（含单设备校验）"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if 'user_id' not in session:
             flash('请先登录', 'warning')
+            return redirect(url_for('login', next=request.url))
+        # 单设备校验：session token 不匹配说明在其他设备重新登录
+        if not verify_session_token(session['user_id'], session.get('session_token')):
+            session.clear()
+            flash('您的账号已在其他设备登录，当前会话已失效', 'warning')
             return redirect(url_for('login', next=request.url))
         return f(*args, **kwargs)
     return decorated_function

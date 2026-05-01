@@ -101,23 +101,23 @@
         {% endif %}
 
         <!-- 考试模式 -->
-        {% if progress.unreviewed > 0 %}
+        {% if progress.total > 0 %}
         <div class="mode-action-card mode-mock" id="modeExamCard" onclick="selectMode('exam')">
             <div class="mode-action-icon"><i class="fas fa-file-alt"></i></div>
             <h3>考试模式</h3>
             <p>组卷测试，提交后出分，统计正确率</p>
-            <p class="text-primary fw-bold mb-1">{{ progress.unreviewed }} 道新题</p>
+            <p class="text-primary fw-bold mb-1">{{ progress.total }} 道题</p>
             <div class="mode-action-check" id="examCheck"><i class="fas fa-check-circle"></i></div>
             <div class="mode-action-config" id="examConfig">
                 <div class="config-row">
-                    <input type="number" id="examCount" class="form-control form-control-sm" min="1" max="{{ progress.unreviewed }}" value="{{ progress.unreviewed }}" style="max-width: 80px;">
-                    <span class="text-muted ms-1">/ {{ progress.unreviewed }} 题</span>
+                    <input type="number" id="examCount" class="form-control form-control-sm" min="1" max="{{ progress.total }}" value="{{ progress.total }}" style="max-width: 80px;">
+                    <span class="text-muted ms-1">/ {{ progress.total }} 题</span>
                 </div>
                 <div class="quick-select">
                     <button class="btn btn-xs btn-outline-secondary quick-count" data-target="examCount" data-count="10">10</button>
                     <button class="btn btn-xs btn-outline-secondary quick-count" data-target="examCount" data-count="20">20</button>
                     <button class="btn btn-xs btn-outline-secondary quick-count" data-target="examCount" data-count="50">50</button>
-                    <button class="btn btn-xs btn-outline-secondary quick-count" data-target="examCount" data-count="{{ progress.unreviewed }}">全部</button>
+                    <button class="btn btn-xs btn-outline-secondary quick-count" data-target="examCount" data-count="{{ progress.total }}">全部</button>
                 </div>
             </div>
             <button class="btn btn-primary btn-sm mt-2" onclick="startMode('exam')"><i class="fas fa-play"></i> 开始</button>
@@ -126,9 +126,9 @@
         <div class="mode-action-card mode-mock disabled-card">
             <div class="mode-action-icon"><i class="fas fa-file-alt"></i></div>
             <h3>考试模式</h3>
-            <p>✅ 所有题目已进入复习</p>
-            <p class="text-muted">无新题可供组卷考试</p>
-            <button class="btn btn-secondary btn-sm mt-2" disabled><i class="fas fa-play"></i> 暂无新题</button>
+            <p>该分类下暂无题目</p>
+            <p class="text-muted">请先导入题目</p>
+            <button class="btn btn-secondary btn-sm mt-2" disabled><i class="fas fa-play"></i> 暂无题目</button>
         </div>
         {% endif %}
     </div>
@@ -165,35 +165,43 @@
     </div>
 
     <!-- 评分分布 -->
-    {% if progress.reviewed > 0 %}
+    {% if progress.reviewed > 0 or progress.distribution.get('未评分', 0) > 0 %}
+    {% set dist_total = progress.distribution.get('忘了', 0) + progress.distribution.get('模糊', 0) + progress.distribution.get('一般', 0) + progress.distribution.get('简单', 0) + progress.distribution.get('秒答', 0) + progress.distribution.get('未评分', 0) %}
     <div class="distribution-section mb-4">
         <h5><i class="fas fa-chart-bar"></i> 评分分布</h5>
         <div class="dist-grid">
             <div class="dist-item">
                 <span class="dist-label">😭 忘了</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['忘了'] / progress.reviewed * 100)|round }}%; background: #e63946;"></div></div>
+                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['忘了'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #e63946;"></div></div>
                 <span class="dist-count">{{ progress.distribution['忘了'] }}</span>
             </div>
             <div class="dist-item">
                 <span class="dist-label">😕 模糊</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['模糊'] / progress.reviewed * 100)|round }}%; background: #f4a261;"></div></div>
+                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['模糊'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #f4a261;"></div></div>
                 <span class="dist-count">{{ progress.distribution['模糊'] }}</span>
             </div>
             <div class="dist-item">
                 <span class="dist-label">😐 一般</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['一般'] / progress.reviewed * 100)|round }}%; background: #e9c46a;"></div></div>
+                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['一般'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #e9c46a;"></div></div>
                 <span class="dist-count">{{ progress.distribution['一般'] }}</span>
             </div>
             <div class="dist-item">
                 <span class="dist-label">😊 简单</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['简单'] / progress.reviewed * 100)|round }}%; background: #2ec4b6;"></div></div>
+                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['简单'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #2ec4b6;"></div></div>
                 <span class="dist-count">{{ progress.distribution['简单'] }}</span>
             </div>
             <div class="dist-item">
                 <span class="dist-label">🤩 秒答</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['秒答'] / progress.reviewed * 100)|round }}%; background: #4361ee;"></div></div>
+                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['秒答'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #4361ee;"></div></div>
                 <span class="dist-count">{{ progress.distribution['秒答'] }}</span>
             </div>
+            {% if progress.distribution.get('未评分', 0) > 0 %}
+            <div class="dist-item">
+                <span class="dist-label">⚪ 未评分</span>
+                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['未评分'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #9ca3af;"></div></div>
+                <span class="dist-count">{{ progress.distribution['未评分'] }}</span>
+            </div>
+            {% endif %}
         </div>
     </div>
     {% endif %}

@@ -426,6 +426,7 @@ from models import (
     get_questions_by_subject, create_question, update_question, delete_question, get_question,
     get_all_subjects_for_permission, get_user_permissions, set_user_subject_permission,
     get_user_by_id, update_user_last_login, hash_password,
+    set_user_session_token, clear_user_session_token,
     # 新增
     get_category, get_subject_by_id,
 )
@@ -442,10 +443,14 @@ def login():
         password = request.form.get('password', '')
         user = authenticate_user(username, password)
         if user and user['role'] == 'admin':
+            import secrets
+            token = secrets.token_hex(32)
             session['user_id'] = user['id']
             session['username'] = user['username']
             session['role'] = 'admin'
+            session['session_token'] = token
             update_user_last_login(user['id'])
+            set_user_session_token(user['id'], token)
             return redirect(url_for('admin.dashboard'))
         flash('用户名或密码错误，或无管理员权限', 'error')
     return render_template('admin/login.html')
@@ -453,9 +458,13 @@ def login():
 
 @admin_bp.route('/logout')
 def logout():
+    user_id = session.get('user_id')
+    if user_id:
+        clear_user_session_token(user_id)
     session.pop('user_id', None)
     session.pop('username', None)
     session.pop('role', None)
+    session.pop('session_token', None)
     return redirect(url_for('admin.login'))
 
 
