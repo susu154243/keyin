@@ -38,6 +38,7 @@ from models import (
     get_questions_by_category as get_questions_by_category_model,
     get_unreviewed_questions, get_unreviewed_count, get_mastered_questions,
     hash_password, create_user, get_category, serialize_row,
+    get_subject_category_stats,
 )
 from auth import login_required, get_current_user
 from admin import admin_bp
@@ -202,14 +203,14 @@ def subject_detail(subject_id):
     real_exam_count = get_real_exam_count(subject_id)
     years = get_exam_years(subject_id)
     overall_accuracy = get_user_subject_accuracy(session['user_id'], subject_id)
-    
+
     perms = None
     if user['role'] != 'admin':
         for s in subjects:
             if s['id'] == subject_id:
                 perms = s
                 break
-    
+
     return render_template('subject_detail.html',
                           subject=subject,
                           total_questions=total_questions,
@@ -244,9 +245,14 @@ def get_sequential_questions(subject_id, category_id=None):
 def practice(subject_id):
     """章节练习 - 选择分类"""
     user = get_current_user()
-    tree = get_categories_tree(subject_id)
     subject = get_subject_by_id(subject_id)
-    return render_template('practice.html', subject=subject, tree=tree)
+    category_data = get_subject_category_stats(user['id'], subject_id)
+    tree = category_data['tree']
+    subject_total = category_data.get('subject_total', {})
+    return render_template('practice.html',
+                          subject=subject,
+                          tree=tree,
+                          subject_total=subject_total)
 
 
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>')
@@ -285,6 +291,9 @@ def study_setup(subject_id, category_id):
     # 为每题添加推断评分
     for d in due_today_list:
         d['inferred_quality'] = infer_quality(d)
+    
+    # 学习/重学中的题目（倒计时）
+    learning_cards = get_learning_cards(user_id, category_id)
 
     # 获取今日复习已完成数（已在本会话中回答的）
     answered_today = set()
@@ -295,13 +304,23 @@ def study_setup(subject_id, category_id):
     # 做题次数统计
     attempt_stats = get_question_attempt_stats(user_id, category_id)
 
+    # 上限检查
+    from models import can_do_new_question, can_do_review, get_study_limits
+    limits_info = get_study_limits(user_id, subject_id)
+    new_limit_info = can_do_new_question(user_id, subject_id)
+    review_limit_info = can_do_review(user_id, subject_id)
+
     return render_template('study_setup.html',
                           subject=subject, category=cat,
                           progress=progress,
                           mastered_list=mastered_list,
                           due_today_list=due_today_list,
                           answered_today=answered_today,
-                          attempt_stats=attempt_stats)
+                          attempt_stats=attempt_stats,
+                          new_limit_info=new_limit_info,
+                          review_limit_info=review_limit_info,
+                          limits_info=limits_info,
+                          learning_cards=learning_cards)
 
 
 # 旧路由兼容：重定向到新学习设置页
@@ -318,6 +337,14 @@ def study_today_review(subject_id, category_id):
     cat = get_category(category_id)
     if not cat or cat['subject_id'] != subject_id:
         abort(404)
+    
+    # 检查复习上限
+    from models import can_do_review
+    limit_info = can_do_review(session['user_id'], subject_id)
+    if not limit_info['can_do']:
+        flash(f'⚠️ 今日复习已达上限（{limit_info["current"]}/{limit_info["limit"]}），请明天再来', 'warning')
+        return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
+    
     due_today_list = get_due_today(session['user_id'], category_id)
     if not due_today_list:
         flash('🎉 今日没有需要复习的题目！', 'success')
@@ -446,6 +473,14 @@ def chapter_practice_start(subject_id, category_id):
     cat = get_category(category_id)
     if not cat or cat['subject_id'] != subject_id:
         abort(404)
+    
+    # 检查新题上限
+    from models import can_do_new_question
+    limit_info = can_do_new_question(session['user_id'], subject_id)
+    if not limit_info['can_do']:
+        flash(f'⚠️ 今日新题已达上限（{limit_info["current"]}/{limit_info["limit"]}），请明天再来', 'warning')
+        return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
+    
     count = request.args.get('count', type=int)
     questions, _ = _get_chapter_questions(subject_id, category_id, session['user_id'], count=count)
     if not questions:
@@ -1039,16 +1074,17 @@ def stats_api(subject_id):
     categories = get_category_mastery(user_id, subject_id)
     retention = get_retention_curve(user_id, subject_id)
 
-    # P2-7: SM-2 掌握度统计
+    # P2-7: 掌握度统计（FSRS/SM-2 双模式）
+    from models import _mastered_sql_condition
     conn = get_db()
     cur = conn.cursor()
     from datetime import datetime
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    cur.execute("""
+    cur.execute(f"""
         SELECT COUNT(*) as mastered FROM review_schedule rs
         JOIN questions q ON q.id = rs.question_id
         WHERE rs.user_id = ? AND q.subject_id = ?
-        AND rs.repetitions >= 3 AND rs.ease_factor >= 2.5 AND rs.interval >= 15
+        AND {_mastered_sql_condition()}
     """, (user_id, subject_id))
     mastered = cur.fetchone()['mastered']
     cur.execute("""
@@ -1066,6 +1102,14 @@ def stats_api(subject_id):
     reviewed = cur.fetchone()['reviewed']
     cur.execute("SELECT COUNT(*) as total FROM questions WHERE subject_id = ? AND status = 1", (subject_id,))
     total = cur.fetchone()['total']
+    
+    # P2-11: 工作负载预测
+    from models import predict_review_load
+    load_forecast = predict_review_load(user_id, subject_id, days=30)
+    
+    # P2-13: 最优保留率推荐
+    from models import calculate_optimal_dr
+    dr_recommendation = calculate_optimal_dr(user_id, subject_id)
     conn.close()
 
     return jsonify({
@@ -1081,7 +1125,24 @@ def stats_api(subject_id):
             'due': due,
             'new': total - reviewed,
         },
+        'load_forecast': load_forecast,
+        'dr_recommendation': dr_recommendation,
     })
+
+
+@app.route('/subjects/<int:subject_id>/apply-dr', methods=['POST'])
+@login_required
+def apply_dr(subject_id):
+    """一键应用推荐的目标保留率"""
+    from models import set_study_limits
+    user_id = session['user_id']
+    data = request.get_json()
+    dr = data.get('desired_retention')
+    if dr is None or not (0.70 <= dr <= 0.98):
+        return jsonify({'success': False, 'error': 'DR 必须在 0.70~0.98 之间'}), 400
+    
+    set_study_limits(user_id, subject_id, desired_retention=dr)
+    return jsonify({'success': True, 'message': f'已设置 DR={dr:.2f}'})
 
 
 # ==================== 旧路由兼容（重定向） ====================

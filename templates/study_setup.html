@@ -37,6 +37,13 @@
             <h3>练习模式</h3>
             <p>逐题即时反馈，SM-2调度，答错重做</p>
             <p class="text-primary fw-bold mb-1">{{ progress.unreviewed }} 道新题</p>
+            {% if not new_limit_info.can_do %}
+            <p class="text-danger fw-bold" style="font-size:0.85rem;">
+                <i class="fas fa-exclamation-triangle"></i> 今日新题已达上限（{{ new_limit_info.current }}/{{ new_limit_info.limit }}）
+            </p>
+            {% else %}
+            <p class="text-muted" style="font-size:0.85rem;">今日剩余：{{ new_limit_info.remaining }}/{{ new_limit_info.limit }} 题</p>
+            {% endif %}
             <div class="mode-action-check" id="practiceCheck"><i class="fas fa-check-circle"></i></div>
             <div class="mode-action-config" id="practiceConfig">
                 <div class="config-row">
@@ -50,7 +57,11 @@
                     <button class="btn btn-xs btn-outline-secondary quick-count" data-target="practiceCount" data-count="{{ progress.unreviewed }}">全部</button>
                 </div>
             </div>
+            {% if not new_limit_info.can_do %}
+            <button class="btn btn-secondary btn-sm mt-2" disabled><i class="fas fa-ban"></i> 已达上限</button>
+            {% else %}
             <button class="btn btn-primary btn-sm mt-2" onclick="startMode('practice')"><i class="fas fa-play"></i> 开始</button>
+            {% endif %}
         </div>
         {% else %}
         <div class="mode-action-card mode-exam disabled-card">
@@ -69,7 +80,15 @@
             <h3>今日复习</h3>
             <p class="text-warning fw-bold mb-1">{{ progress.due_today }} 题待复习</p>
             <p>SM-2到期题目，按调度复习</p>
+            {% if not review_limit_info.can_do %}
+            <p class="text-danger fw-bold" style="font-size:0.85rem;">
+                <i class="fas fa-exclamation-triangle"></i> 今日复习已达上限（{{ review_limit_info.current }}/{{ review_limit_info.limit }}）
+            </p>
+            <button class="btn btn-secondary btn-sm mt-2" disabled><i class="fas fa-ban"></i> 已达上限</button>
+            {% else %}
+            <p class="text-muted" style="font-size:0.85rem;">今日剩余：{{ review_limit_info.remaining }}/{{ review_limit_info.limit }} 题</p>
             <a href="{{ url_for('study_today_review', subject_id=subject.id, category_id=category.id) }}" class="btn btn-success btn-sm mt-2"><i class="fas fa-play"></i> 开始复习</a>
+            {% endif %}
         </div>
         {% else %}
         <div class="mode-action-card mode-today disabled-card">
@@ -163,6 +182,54 @@
             <span class="stat-label">🏆 已掌握</span>
         </div>
     </div>
+
+    <!-- 今日待复习题目列表（含卡片状态） -->
+    {% if due_today_list %}
+    <div class="due-today-section mb-4">
+        <h5><i class="fas fa-calendar-day"></i> 今日待复习（{{ due_today_list | length }} 题）</h5>
+        <div class="due-list">
+            {% for d in due_today_list %}
+            <div class="due-item">
+                <span class="due-id">{{ d.id }}</span>
+                <span class="card-badge badge-{{ d.card_state or 'review' }}">
+                    {% if d.card_state == 'learning' %}
+                        🟡 学习中 · 第{{ d.learning_step + 1 }}步
+                    {% elif d.card_state == 'relearning' %}
+                        🔴 重学中 · 第{{ d.learning_step + 1 }}步
+                    {% else %}
+                        🟢 复习中
+                    {% endif %}
+                </span>
+                {% if d.card_state == 'review' and d.interval %}
+                <span class="due-interval">间隔 {{ d.interval }}天</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 学习/重学中题目（倒计时） -->
+    {% if learning_cards %}
+    <div class="learning-cards-section mb-4">
+        <h5><i class="fas fa-hourglass-half"></i> 学习中（{{ learning_cards | length }} 题）</h5>
+        <div class="learning-list" id="learningList">
+            {% for lc in learning_cards %}
+            <div class="learning-item" data-next-review="{{ lc.next_review }}">
+                <span class="learning-id">{{ lc.id }}</span>
+                <span class="card-badge {{ lc.badge_class }}">{{ lc.state_label }} · 第{{ lc.learning_step + 1 }}步</span>
+                <span class="learning-countdown" data-minutes="{{ lc.minutes_left }}">
+                    {% if lc.minutes_left > 0 %}
+                        还剩 {{ lc.minutes_left }} 分钟可复习
+                    {% else %}
+                        ✅ 可以复习了
+                    {% endif %}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
 
     <!-- 评分分布 -->
     {% if progress.reviewed > 0 or progress.distribution.get('未评分', 0) > 0 %}
@@ -357,6 +424,35 @@ function applyFilterAndSort() {
     // 排序逻辑（简化：仅隐藏/显示）
     // 完整排序需重新渲染，此处省略
 }
+
+// 学习步骤倒计时（每30秒刷新）
+function updateLearningCountdown() {
+    const now = Date.now();
+    document.querySelectorAll('.learning-countdown[data-minutes]').forEach(el => {
+        const item = el.closest('.learning-item');
+        if (!item) return;
+        const nextReviewStr = item.dataset.nextReview;
+        if (!nextReviewStr) return;
+        
+        const nextReview = new Date(nextReviewStr.replace(' ', 'T'));
+        const diffMs = nextReview.getTime() - now;
+        const diffMin = Math.max(0, Math.round(diffMs / 60000));
+        
+        if (diffMin > 0) {
+            el.textContent = `还剩 ${diffMin} 分钟可复习`;
+        } else {
+            el.textContent = '✅ 可以复习了';
+            el.style.color = '#059669';
+            el.style.fontWeight = 'bold';
+        }
+    });
+}
+
+// 初始执行 + 每30秒刷新
+if (document.querySelector('.learning-countdown')) {
+    updateLearningCountdown();
+    setInterval(updateLearningCountdown, 30000);
+}
 </script>
 
 <style>
@@ -402,6 +498,24 @@ function applyFilterAndSort() {
 
 /* 已掌握卡片 */
 .mode-action-card.mode-mastered .mode-action-icon { color: #f59e0b; }
+
+/* 今日待复习列表 */
+.due-today-section h5 { margin-bottom: 0.75rem; font-size: 1rem; color: var(--gray-700); }
+.due-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.due-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem; background: var(--gray-50); border-radius: var(--border-radius-sm); font-size: 0.85rem; }
+.due-id { font-weight: 600; min-width: 80px; }
+.card-badge { padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 500; }
+.badge-learning { background: #fef3c7; color: #92400e; }
+.badge-relearning { background: #fee2e2; color: #991b1b; }
+.badge-review { background: #d1fae5; color: #065f46; }
+.due-interval { color: var(--gray-500); margin-left: auto; }
+
+/* 学习中列表 */
+.learning-cards-section h5 { margin-bottom: 0.75rem; font-size: 1rem; color: var(--gray-700); }
+.learning-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.learning-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem; background: #f8f9fa; border-radius: var(--border-radius-sm); font-size: 0.85rem; border-left: 3px solid #f59e0b; }
+.learning-id { font-weight: 600; min-width: 80px; }
+.learning-countdown { margin-left: auto; color: var(--gray-600); font-weight: 500; }
 .mode-action-card.mode-mastered:not(.disabled-card) { background: rgba(245, 158, 11, 0.05); }
 
 /* 四指标栏 */

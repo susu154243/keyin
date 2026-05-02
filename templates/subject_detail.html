@@ -75,37 +75,7 @@
     </div>
 </div>
 
-<!-- 分类树 -->
-{% if tree %}
-<div class="card mb-4">
-    <h2 class="card-title"><i class="fas fa-sitemap"></i> 分类导航</h2>
-    <div class="category-tree">
-        {% for level1 in tree %}
-        <div class="category-level-1">
-            <h3><i class="fas fa-folder"></i> {{ level1.name }}</h3>
-            {% if level1.children %}
-            <div class="category-level-2">
-                {% for level2 in level1.children %}
-                <div class="category-level-2-item">
-                    <h4><i class="fas fa-folder-open"></i> {{ level2.name }}</h4>
-                    {% if level2.children %}
-                    <div class="category-level-3">
-                        {% for level3 in level2.children %}
-                        <a href="{{ url_for('study_setup', subject_id=subject.id, category_id=level3.id) }}" class="category-level-3-item">
-                            <i class="fas fa-book-reader"></i> {{ level3.name }}
-                        </a>
-                        {% endfor %}
-                    </div>
-                    {% endif %}
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
-        </div>
-        {% endfor %}
-    </div>
-</div>
-{% endif %}
+
 
 <div class="text-center mt-3">
     <a href="{{ url_for('index') }}" class="btn btn-outline-primary">
@@ -120,13 +90,6 @@
     .mode-icon { font-size: 2rem; color: var(--primary-color); margin-bottom: 0.75rem; }
     .mode-card h3 { font-size: 1.1rem; margin-bottom: 0.5rem; }
     .mode-card p { color: var(--gray-600); font-size: 0.9rem; margin: 0; }
-    .category-tree { padding: 1rem 0; }
-    .category-level-1 { margin-bottom: 1.5rem; }
-    .category-level-1 h3 { font-size: 1.2rem; color: var(--primary-color); margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary-color); }
-    .category-level-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-left: 1.5rem; }
-    .category-level-2-item h4 { font-size: 1rem; color: var(--gray-700); margin-bottom: 0.5rem; }
-    .category-level-3 { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-left: 1rem; }
-    .category-level-3-item { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.8rem; background-color: var(--gray-100); border-radius: var(--border-radius); text-decoration: none; color: var(--gray-700); font-size: 0.9rem; transition: var(--transition); }
-    .category-level-3-item:hover { background-color: var(--primary-color); color: white; }
+
 </style>
 {% endblock %}

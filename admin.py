@@ -19,6 +19,11 @@ logger = logging.getLogger(__name__)
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session, jsonify
 from auth import admin_required, login_required
 from models import get_db
+from models import (
+    update_question_id, health_check_questions, batch_delete_by_category,
+    batch_move_questions, batch_update_questions, create_import_log,
+    get_import_logs, delete_import_log,
+)
 
 # ==================== apkg 导入工具函数 ====================
 
@@ -698,8 +703,18 @@ def edit_question_page(qid):
         return redirect(url_for('admin.questions'))
     
     leaf_cats = get_leaf_categories(question['subject_id'])
+    old_id = qid
     
     if request.method == 'POST':
+        # 处理 ID 修改
+        new_id = request.form.get('question_id', '').strip()
+        if new_id and new_id != old_id:
+            ok, msg = update_question_id(old_id, new_id)
+            if not ok:
+                flash(f'ID 修改失败: {msg}', 'error')
+                return render_template('admin/question_edit.html', question=question, leaf_cats=leaf_cats)
+            qid = new_id
+        
         data = {
             'stem': request.form.get('stem', ''),
             'options': request.form.get('options', '{}'),
@@ -712,6 +727,7 @@ def edit_question_page(qid):
             'is_real_exam': request.form.get('is_real_exam', 0, type=int),
             'exam_year': request.form.get('exam_year', type=int),
             'source': request.form.get('source', 'practice'),
+            'status': request.form.get('status', 1, type=int),
         }
         update_question(qid, data)
         flash('题目更新成功', 'success')
@@ -843,6 +859,20 @@ def import_page():
                 continue
         
         flash(f'导入完成：成功 {imported} 条，失败 {errors} 条', 'success')
+        
+        # 记录导入日志
+        subject = get_subject_by_id(subject_id)
+        create_import_log({
+            'operator': session.get('username', 'admin'),
+            'file_name': file.filename,
+            'file_type': 'csv',
+            'subject_id': subject_id,
+            'subject_name': subject['name'] if subject else '',
+            'imported': imported,
+            'errors': errors,
+            'status': 'success' if errors == 0 else 'partial',
+        })
+        
         return redirect(url_for('admin.questions', subject_id=subject_id))
     
     return render_template('admin/import.html', subjects=subjects)
@@ -877,6 +907,20 @@ def import_apkg():
         finally:
             os.unlink(tmp.name)
         
+        # 记录导入日志
+        subject = get_subject_by_id(subject_id)
+        status = 'failed' if result['imported'] == 0 else ('partial' if result['errors'] else 'success')
+        create_import_log({
+            'operator': session.get('username', 'admin'),
+            'file_name': file.filename,
+            'file_type': 'apkg',
+            'subject_id': subject_id,
+            'subject_name': subject['name'] if subject else '',
+            'imported': result['imported'],
+            'errors': result['errors'],
+            'status': status,
+        })
+        
         if result['errors'] > 0 and result['imported'] == 0:
             flash(f'导入失败：{result["errors"]} 条错误', 'error')
         else:
@@ -892,3 +936,198 @@ def import_apkg():
         return redirect(url_for('admin.questions', subject_id=subject_id))
     
     return render_template('admin/import_apkg.html', subjects=subjects)
+
+
+# ==================== 数据健康检查 ====================
+
+@admin_bp.route('/health')
+def health_check():
+    """数据健康检查页面"""
+    subjects = get_all_subjects_for_permission()
+    subject_id = request.args.get('subject_id', type=int)
+    
+    results = None
+    if subject_id:
+        results = health_check_questions(subject_id)
+    
+    return render_template('admin/health.html', subjects=subjects, subject_id=subject_id, results=results)
+
+
+# ==================== 批量操作 ====================
+
+@admin_bp.route('/batch', methods=['GET', 'POST'])
+def batch_ops():
+    """批量操作页面"""
+    subjects = get_all_subjects_for_permission()
+    subject_id = request.args.get('subject_id', type=int)
+    
+    if request.method == 'POST':
+        action = request.form.get('action')
+        
+        if action == 'delete_by_category':
+            category_id = request.form.get('category_id', type=int)
+            if not category_id:
+                flash('请选择分类', 'error')
+                return redirect(url_for('admin.batch_ops', subject_id=subject_id))
+            count = batch_delete_by_category(category_id)
+            flash(f'已软删除 {count} 道题目', 'success')
+        
+        elif action == 'move_questions':
+            from_cat = request.form.get('from_category_id', type=int)
+            to_cat = request.form.get('to_category_id', type=int)
+            if not from_cat or not to_cat:
+                flash('请选择源分类和目标分类', 'error')
+                return redirect(url_for('admin.batch_ops', subject_id=subject_id))
+            count, msg = batch_move_questions(from_cat, to_cat)
+            if msg != 'OK':
+                flash(f'迁移失败: {msg}', 'error')
+            else:
+                flash(f'已迁移 {count} 道题目', 'success')
+        
+        elif action == 'batch_update':
+            category_id = request.form.get('category_id', type=int)
+            if not category_id:
+                flash('请选择分类', 'error')
+                return redirect(url_for('admin.batch_ops', subject_id=subject_id))
+            
+            # 获取该分类下所有题目 ID
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM questions WHERE category_id = ? AND status = 1", (category_id,))
+            qids = [r['id'] for r in cur.fetchall()]
+            conn.close()
+            
+            if not qids:
+                flash('该分类下没有启用的题目', 'warning')
+                return redirect(url_for('admin.batch_ops', subject_id=subject_id))
+            
+            update_data = {}
+            if request.form.get('difficulty'):
+                update_data['difficulty'] = request.form.get('difficulty')
+            if request.form.get('source'):
+                update_data['source'] = request.form.get('source')
+            is_real = request.form.get('is_real_exam')
+            if is_real is not None:
+                update_data['is_real_exam'] = 1 if is_real == '1' else 0
+            status_val = request.form.get('status')
+            if status_val is not None:
+                update_data['status'] = int(status_val)
+            
+            if update_data:
+                count = batch_update_questions(qids, update_data)
+                flash(f'已更新 {count} 道题目', 'success')
+            else:
+                flash('没有需要更新的字段', 'warning')
+        
+        return redirect(url_for('admin.batch_ops', subject_id=subject_id))
+    
+    # GET: 显示分类列表供选择
+    leaf_cats = []
+    all_cats = []
+    if subject_id:
+        leaf_cats = get_leaf_categories(subject_id)
+        # 获取所有分类（含父级）用于迁移
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, level FROM categories WHERE subject_id = ? ORDER BY level, name", (subject_id,))
+        all_cats = [dict(r) for r in cur.fetchall()]
+        conn.close()
+    
+    return render_template('admin/batch_ops.html', subjects=subjects, subject_id=subject_id,
+                          leaf_cats=leaf_cats, all_cats=all_cats)
+
+
+# ==================== 导入日志 ====================
+
+@admin_bp.route('/import-logs')
+def import_logs_page():
+    """导入日志列表"""
+    page = request.args.get('page', 1, type=int)
+    logs, total = get_import_logs(page=page)
+    total_pages = (total + 20 - 1) // 20
+    return render_template('admin/import_logs.html', logs=logs, page=page, total_pages=total_pages, total=total)
+
+
+@admin_bp.route('/import-logs/<int:log_id>/delete', methods=['POST'])
+def delete_import_log_page(log_id):
+    """删除单条导入日志"""
+    delete_import_log(log_id)
+    flash('日志已删除', 'success')
+    return redirect(url_for('admin.import_logs_page'))
+
+
+# ==================== 每日学习上限管理 ====================
+
+from models import get_study_limits, set_study_limits, get_daily_study_count
+
+
+@admin_bp.route('/study-limits')
+@admin_required
+def study_limits_page():
+    """每日学习上限管理页面"""
+    from models import get_db, get_subjects, get_users
+    
+    subjects = get_subjects()
+    users = get_users()
+    
+    # 获取所有已配置的上限
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT sl.user_id, sl.subject_id, sl.daily_new_limit, sl.daily_review_limit, sl.desired_retention, sl.max_interval, sl.learning_steps,
+               u.username, s.name as subject_name
+        FROM study_limits sl
+        JOIN users u ON u.id = sl.user_id
+        JOIN subjects s ON s.id = sl.subject_id
+        ORDER BY u.username, s.name
+    """)
+    configs = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    
+    return render_template('admin/study_limits.html', subjects=subjects, users=users, configs=configs)
+
+
+@admin_bp.route('/study-limits/set', methods=['POST'])
+@admin_required
+def set_study_limits_api():
+    """设置每日学习上限"""
+    user_id = request.form.get('user_id', type=int)
+    subject_id = request.form.get('subject_id', type=int)
+    daily_new_limit = request.form.get('daily_new_limit', type=int)
+    daily_review_limit = request.form.get('daily_review_limit', type=int)
+    desired_retention = request.form.get('desired_retention', type=float)
+    max_interval = request.form.get('max_interval', type=int)
+    learning_steps_raw = request.form.get('learning_steps')
+    
+    learning_steps = None
+    if learning_steps_raw:
+        try:
+            learning_steps = [int(x.strip()) for x in learning_steps_raw.split(',')]
+        except (ValueError, TypeError):
+            pass
+    
+    if not user_id or not subject_id:
+        flash('请选择用户和科目', 'error')
+        return redirect(url_for('admin.study_limits_page'))
+    
+    result = set_study_limits(user_id, subject_id, daily_new_limit, daily_review_limit, desired_retention, max_interval, learning_steps)
+    ls_str = ','.join(str(x) for x in result['learning_steps'])
+    flash(f'已设置: 新题 {result["daily_new_limit"]}/天, 复习 {result["daily_review_limit"]}/天, DR={result["desired_retention"]:.0%}, 最大间隔={result["max_interval"]}天, 学习步骤=[{ls_str}]min', 'success')
+    return redirect(url_for('admin.study_limits_page'))
+
+
+@admin_bp.route('/study-limits/<int:user_id>/<int:subject_id>/today')
+@admin_required
+def study_limits_today(user_id, subject_id):
+    """查看用户今日学习进度"""
+    from models import get_users, get_subject_by_id
+    
+    user = get_users().get(user_id) if get_users() else None
+    subject = get_subject_by_id(subject_id)
+    limits = get_study_limits(user_id, subject_id)
+    count = get_daily_study_count(user_id, subject_id)
+    
+    return render_template('admin/study_limits_today.html',
+                          user_id=user_id, subject_id=subject_id,
+                          user=user, subject=subject,
+                          limits=limits, count=count)

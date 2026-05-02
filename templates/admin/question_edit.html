@@ -5,6 +5,12 @@
 <div class="card" style="max-width: 800px;">
     <form method="post">
         <div class="form-group">
+            <label class="form-label">题目 ID</label>
+            <input type="text" name="question_id" class="form-control" value="{{ question.id }}" 
+                   style="font-family: monospace; max-width: 200px;">
+            <small class="text-muted">格式如 <code>2.2-60</code>，修改时确保不与其他题目冲突</small>
+        </div>
+        <div class="form-group">
             <label class="form-label">题干</label>
             <textarea name="stem" class="form-control" rows="4" required>{{ question.stem }}</textarea>
         </div>

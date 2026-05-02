@@ -49,6 +49,21 @@
     <canvas id="daily-chart" height="100"></canvas>
 </div>
 
+<!-- 工作负载预测 -->
+<div class="card mb-4">
+    <h2 class="card-title"><i class="fas fa-calendar-check"></i> 未来 30 天复习量预测</h2>
+    <canvas id="load-chart" height="80"></canvas>
+    <p class="text-muted mt-2" id="load-summary"></p>
+</div>
+
+<!-- DR 推荐 -->
+<div class="card mb-4">
+    <h2 class="card-title"><i class="fas fa-brain"></i> 推荐目标保留率</h2>
+    <div class="dr-recommendation" id="dr-recommendation">
+        <p class="text-muted">计算中...</p>
+    </div>
+</div>
+
 <!-- 分类掌握度 -->
 <div class="card mb-4">
     <h2 class="card-title"><i class="fas fa-bullseye"></i> 分类掌握度</h2>
@@ -99,6 +114,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // 每日趋势图
     renderDailyChart(data.daily_trend);
+    
+    // 工作负载预测
+    renderLoadForecast(data.load_forecast);
+    
+    // DR 推荐
+    renderDrRecommendation(data.dr_recommendation);
     
     // 分类掌握度
     renderMasteryBars(data.category_mastery);
@@ -180,6 +201,99 @@ function renderDailyChart(dailyData) {
                 y1: { position: 'right', min: 0, max: 100, title: { display: true, text: '正确率%' } }
             }
         }
+    });
+}
+
+// ========== 工作负载预测 ==========
+function renderLoadForecast(forecastData) {
+    const container = document.getElementById('load-chart');
+    if (!forecastData || Object.keys(forecastData).length === 0) {
+        container.parentElement.innerHTML = '<p class="text-muted">暂无复习计划数据</p>';
+        document.getElementById('load-summary').textContent = '';
+        return;
+    }
+    
+    const dates = Object.keys(forecastData).sort();
+    const counts = dates.map(d => forecastData[d]);
+    const totalLoad = counts.reduce((a, b) => a + b, 0);
+    const avgLoad = totalLoad / dates.length;
+    const maxDay = dates[counts.indexOf(Math.max(...counts))];
+    
+    document.getElementById('load-summary').textContent = 
+        `未来 30 天共 ${totalLoad} 次复习，日均 ${avgLoad.toFixed(1)} 次，峰值在 ${maxDay}（${Math.max(...counts)} 次）`;
+    
+    new Chart(document.getElementById('load-chart'), {
+        type: 'bar',
+        data: {
+            labels: dates.map(d => d.slice(5)),
+            datasets: [{
+                label: '预测复习量',
+                data: counts,
+                backgroundColor: counts.map(c => c > 20 ? 'rgba(230,57,70,0.6)' : c > 10 ? 'rgba(255,183,3,0.6)' : 'rgba(67,97,238,0.5)')
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                y: { beginAtZero: true, title: { display: true, text: '到期题数' } }
+            }
+        }
+    });
+}
+
+// ========== DR 推荐 ==========
+function renderDrRecommendation(data) {
+    const container = document.getElementById('dr-recommendation');
+    if (!data || data.total_answers < 10) {
+        container.innerHTML = `<p class="text-muted">${data?.reason || '数据不足'}</p>`;
+        return;
+    }
+    
+    const color = data.recommended_dr >= 0.95 ? '#e63946' : data.recommended_dr >= 0.90 ? '#ffb703' : '#2ec4b6';
+    
+    container.innerHTML = `
+        <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;">
+            <div style="text-align:center;">
+                <div style="font-size:2.5rem;font-weight:bold;color:${color}">${data.recommended_dr.toFixed(2)}</div>
+                <div style="font-size:0.85rem;color:#666">推荐 DR</div>
+            </div>
+            <div style="flex:1;min-width:200px;">
+                <p style="margin:0 0 0.5rem;font-size:0.95rem;"><strong>正确率</strong> ${data.accuracy}%（${data.total_answers} 题）</p>
+                <p style="margin:0 0 0.5rem;font-size:0.95rem;"><strong>平均稳定性</strong> ${data.avg_stability}</p>
+                <p style="margin:0;font-size:0.9rem;color:#666">${data.reason}</p>
+            </div>
+            <button class="btn btn-sm btn-primary" id="applyDrBtn" onclick="applyDr(${data.recommended_dr})">
+                <i class="fas fa-check"></i> 应用到此科目
+            </button>
+        </div>
+    `;
+}
+
+// 应用推荐 DR
+function applyDr(dr) {
+    const btn = document.getElementById('applyDrBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 应用中...';
+    
+    fetch(`/subjects/{{ subject.id }}/apply-dr`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ desired_retention: dr })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            btn.innerHTML = '<i class="fas fa-check"></i> 已应用';
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-success');
+        } else {
+            btn.innerHTML = '<i class="fas fa-times"></i> 失败';
+            btn.classList.add('btn-danger');
+        }
+    })
+    .catch(() => {
+        btn.innerHTML = '<i class="fas fa-times"></i> 网络错误';
+        btn.classList.add('btn-danger');
     });
 }
 

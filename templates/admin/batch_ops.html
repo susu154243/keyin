@@ -1,0 +1,127 @@
+{% extends 'admin/base.html' %}
+{% block title %}批量操作{% endblock %}
+{% block content %}
+<div class="admin-header">
+    <h1><i class="fas fa-layer-group"></i> 批量操作</h1>
+    <select id="subjectSelect" class="form-control" style="width: 200px;" onchange="window.location.href='?subject_id=' + this.value">
+        <option value="">选择科目</option>
+        {% for s in subjects %}
+        <option value="{{ s.id }}" {% if s.id == subject_id %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+    </select>
+</div>
+
+{% if not subject_id %}
+<div class="card"><p class="text-muted">请选择科目</p></div>
+{% else %}
+
+<!-- 按分类批量删除 -->
+<div class="card mb-3">
+    <h3><i class="fas fa-trash-alt" style="color: #ef4444;"></i> 按分类批量删除</h3>
+    <p class="text-muted mb-3">软删除指定分类下所有题目（status=0），可恢复</p>
+    <form method="post" onsubmit="return confirm('确认删除该分类下所有题目？')">
+        <input type="hidden" name="action" value="delete_by_category">
+        <div class="d-flex gap-2 align-items-end">
+            <div class="form-group">
+                <label class="form-label">选择分类</label>
+                <select name="category_id" class="form-control" required>
+                    <option value="">请选择</option>
+                    {% for c in leaf_cats %}
+                    <option value="{{ c.id }}">{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn btn-danger"><i class="fas fa-trash-alt"></i> 删除</button>
+        </div>
+    </form>
+</div>
+
+<!-- 批量迁移分类 -->
+<div class="card mb-3">
+    <h3><i class="fas fa-exchange-alt" style="color: #3b82f6;"></i> 批量迁移分类</h3>
+    <p class="text-muted mb-3">将源分类下所有题目迁移到目标分类</p>
+    <form method="post" onsubmit="return confirm('确认迁移？')">
+        <input type="hidden" name="action" value="move_questions">
+        <div class="d-flex gap-2 align-items-end">
+            <div class="form-group">
+                <label class="form-label">源分类</label>
+                <select name="from_category_id" class="form-control" required>
+                    <option value="">请选择</option>
+                    {% for c in leaf_cats %}
+                    <option value="{{ c.id }}">{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">目标分类</label>
+                <select name="to_category_id" class="form-control" required>
+                    <option value="">请选择</option>
+                    {% for c in leaf_cats %}
+                    <option value="{{ c.id }}">{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary"><i class="fas fa-exchange-alt"></i> 迁移</button>
+        </div>
+    </form>
+</div>
+
+<!-- 批量修改属性 -->
+<div class="card">
+    <h3><i class="fas fa-pen-to-square" style="color: #10b981;"></i> 批量修改题目属性</h3>
+    <p class="text-muted mb-3">修改指定分类下所有题目的属性（仅修改填写的字段）</p>
+    <form method="post">
+        <input type="hidden" name="action" value="batch_update">
+        <div class="form-group">
+            <label class="form-label">选择分类</label>
+            <select name="category_id" class="form-control" required>
+                <option value="">请选择</option>
+                {% for c in leaf_cats %}
+                <option value="{{ c.id }}">{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="form-row d-flex gap-3 mt-3">
+            <div class="form-group">
+                <label class="form-label">难度</label>
+                <select name="difficulty" class="form-control">
+                    <option value="">不修改</option>
+                    <option value="简单">简单</option>
+                    <option value="中等">中等</option>
+                    <option value="困难">困难</option>
+                    <option value="无">无</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">来源</label>
+                <select name="source" class="form-control">
+                    <option value="">不修改</option>
+                    <option value="practice">章节练习</option>
+                    <option value="exam">历史真题</option>
+                    <option value="mock">模拟考试</option>
+                    <option value="daily">每日打卡</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">真题</label>
+                <select name="is_real_exam" class="form-control">
+                    <option value="">不修改</option>
+                    <option value="1">是</option>
+                    <option value="0">否</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label class="form-label">状态</label>
+                <select name="status" class="form-control">
+                    <option value="">不修改</option>
+                    <option value="1">启用</option>
+                    <option value="0">禁用</option>
+                </select>
+            </div>
+        </div>
+        <button type="submit" class="btn btn-success mt-3"><i class="fas fa-pen-to-square"></i> 更新</button>
+    </form>
+</div>
+
+{% endif %}
+{% endblock %}

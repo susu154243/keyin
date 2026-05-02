@@ -12,28 +12,52 @@
 <div class="card">
     <h2 class="card-title"><i class="fas fa-book-open"></i> 章节练习 - 选择分类</h2>
     <p class="text-muted mb-3">点击末级分类开始练习</p>
-    
+
+    <!-- 科目汇总 -->
+    {% if subject_total %}
+    <div class="subject-progress-summary">
+        <span class="stat-badge stat-total">总题量 {{ subject_total.total }}</span>
+        <span class="stat-badge stat-studied">已学习 {{ subject_total.studied }}</span>
+        <span class="stat-badge {{ 'stat-due' if subject_total.due > 0 else 'stat-due-empty' }}">待复习 {{ subject_total.due }}</span>
+        <span class="stat-badge stat-mastered">已掌握 {{ subject_total.mastered }}</span>
+    </div>
+    {% endif %}
+
     {% if tree %}
     <div class="category-tree">
-        {% for cat in tree %}
+        {% for level1 in tree %}
         <div class="category-level-1">
-            <h3><i class="fas fa-folder"></i> {{ cat.name }}</h3>
-            {% if cat.children %}
+            <h3>
+                <i class="fas fa-folder"></i> {{ level1.name }}
+                {% if level1._stats %}
+                <span class="l1-summary">
+                    总题量 {{ level1._stats.total }} · 已学习 {{ level1._stats.studied }} · <span class="l1-due {{ 'l1-due-alert' if level1._stats.due > 0 }}">待复习 {{ level1._stats.due }}</span> · 已掌握 {{ level1._stats.mastered }}
+                </span>
+                {% endif %}
+            </h3>
+            {% if level1.children %}
             <div class="category-level-2">
-                {% for child in cat.children %}
+                {% for level2 in level1.children %}
                 <div class="category-level-2-item">
-                    {% if child.children %}
-                    <h4><i class="fas fa-folder-open"></i> {{ child.name }}</h4>
+                    <h4>
+                        <i class="fas fa-folder-open"></i> {{ level2.name }}
+                        {% if level2._stats %}
+                        <span class="l2-stats">
+                            总 {{ level2._stats.total }} · 已学 {{ level2._stats.studied }} · <span class="l2-due {{ 'l2-due-alert' if level2._stats.due > 0 }}">待复 {{ level2._stats.due }}</span> · 已掌 {{ level2._stats.mastered }}
+                        </span>
+                        {% endif %}
+                    </h4>
+                    {% if level2.children %}
                     <div class="category-level-3">
-                        {% for sub in child.children %}
-                        <a href="{{ url_for('study_setup', subject_id=subject.id, category_id=sub.id) }}" class="category-level-3-item">
-                            <i class="fas fa-book-reader"></i> {{ sub.name }}
+                        {% for level3 in level2.children %}
+                        <a href="{{ url_for('study_setup', subject_id=subject.id, category_id=level3.id) }}" class="category-level-3-item">
+                            <i class="fas fa-book-reader"></i> {{ level3.name }}
                         </a>
                         {% endfor %}
                     </div>
                     {% else %}
-                    <a href="{{ url_for('study_setup', subject_id=subject.id, category_id=child.id) }}" class="category-level-3-item">
-                        <i class="fas fa-book-reader"></i> {{ child.name }}
+                    <a href="{{ url_for('study_setup', subject_id=subject.id, category_id=level2.id) }}" class="category-level-3-item">
+                        <i class="fas fa-play-circle"></i> 开始练习
                     </a>
                     {% endif %}
                 </div>
@@ -49,13 +73,44 @@
 </div>
 
 <style>
-    .category-tree { padding: 1rem 0; }
+    /* 补充变量（base.html 可能未覆盖） */
+    .category-tree { padding: 0.5rem 0; }
     .category-level-1 { margin-bottom: 1.5rem; }
-    .category-level-1 h3 { font-size: 1.2rem; color: var(--primary-color); margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary-color); }
-    .category-level-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-left: 1.5rem; }
-    .category-level-2-item h4 { font-size: 1rem; color: var(--gray-700); margin-bottom: 0.5rem; }
-    .category-level-3 { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-left: 1rem; }
-    .category-level-3-item { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; background-color: var(--gray-100); border-radius: var(--border-radius); text-decoration: none; color: var(--gray-700); font-size: 0.9rem; transition: var(--transition); }
-    .category-level-3-item:hover { background-color: var(--primary-color); color: white; }
+    .category-level-1 h3 { font-size: 1.15rem; color: var(--primary-color); margin-bottom: 0.75rem; padding-bottom: 0.5rem; border-bottom: 2px solid var(--primary-color); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.75rem; }
+    .category-level-1 h3 .fa-folder { opacity: 0.7; }
+    .category-level-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; margin-left: 1.25rem; }
+    .category-level-2-item { background: var(--gray-100); border-radius: 8px; padding: 0.75rem 1rem; }
+    .category-level-2-item h4 { font-size: 0.95rem; color: var(--gray-700); margin-bottom: 0.5rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+    .category-level-2-item h4 .fa-folder-open { color: var(--warning-color); font-size: 0.85rem; }
+    .category-level-3 { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .category-level-3-item { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.7rem; background: white; border: 1px solid var(--gray-200); border-radius: 6px; text-decoration: none; color: var(--gray-600); font-size: 0.85rem; transition: var(--transition); }
+    .category-level-3-item:hover { background: var(--primary-color); color: white; border-color: var(--primary-color); transform: translateY(-1px); box-shadow: 0 2px 6px rgba(67, 97, 238, 0.25); }
+    .category-level-3-item .fa-book-reader { font-size: 0.75rem; opacity: 0.6; }
+    /* 科目汇总条 */
+    .subject-progress-summary { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.75rem 1rem; background: linear-gradient(135deg, #f0f4ff 0%, #e8f4f3 100%); border-radius: 8px; margin-bottom: 1.25rem; border: 1px solid rgba(67, 97, 238, 0.08); }
+    .stat-badge { font-size: 0.85rem; padding: 0.35rem 0.75rem; border-radius: 20px; font-weight: 500; display: inline-flex; align-items: center; gap: 0.3rem; }
+    .stat-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; }
+    .stat-total { background: rgba(67, 97, 238, 0.1); color: var(--primary-color); }
+    .stat-total::before { background: var(--primary-color); }
+    .stat-studied { background: rgba(46, 196, 182, 0.1); color: var(--success-color); }
+    .stat-studied::before { background: var(--success-color); }
+    .stat-due { background: rgba(255, 159, 67, 0.1); color: var(--warning-color); }
+    .stat-due::before { background: var(--warning-color); }
+    .stat-due-empty { background: rgba(150, 150, 150, 0.08); color: var(--gray-500); }
+    .stat-due-empty::before { background: var(--gray-500); }
+    .stat-mastered { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+    .stat-mastered::before { background: #10b981; }
+    /* 一级汇总 */
+    .l1-summary { font-size: 0.82rem; color: var(--gray-500); font-weight: 400; letter-spacing: 0.02em; }
+    .l1-due { color: var(--gray-400); }
+    .l1-due-alert { color: var(--warning-color); font-weight: 600; animation: pulse-due 2s ease-in-out infinite; }
+    /* 二级行内统计 */
+    .l2-stats { font-size: 0.78rem; color: var(--gray-500); font-weight: 400; }
+    .l2-due { color: var(--gray-400); }
+    .l2-due-alert { color: var(--warning-color); font-weight: 600; }
+    @keyframes pulse-due {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
 </style>
 {% endblock %}

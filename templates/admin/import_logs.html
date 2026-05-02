@@ -1,0 +1,57 @@
+{% extends 'admin/base.html' %}
+{% block title %}导入日志{% endblock %}
+{% block content %}
+<div class="admin-header">
+    <h1><i class="fas fa-clipboard-list"></i> 导入日志</h1>
+</div>
+
+{% if not logs %}
+<div class="card"><p class="text-muted">暂无导入记录</p></div>
+{% else %}
+
+<div class="card">
+    <p class="text-muted mb-3">共 {{ total }} 条记录</p>
+    <div class="table-container">
+        <table class="table">
+            <thead><tr><th>时间</th><th>操作人</th><th>文件</th><th>类型</th><th>科目</th><th>成功</th><th>失败</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log.created_at }}</td>
+                    <td>{{ log.operator }}</td>
+                    <td>{{ log.file_name or '-' }}</td>
+                    <td>{{ log.file_type|upper }}</td>
+                    <td>{{ log.subject_name or log.subject_id }}</td>
+                    <td>{{ log.imported }}</td>
+                    <td>{{ log.errors }}</td>
+                    <td>
+                        {% if log.status == 'success' %}
+                        <span class="badge badge-success">成功</span>
+                        {% elif log.status == 'partial' %}
+                        <span class="badge badge-warning">部分失败</span>
+                        {% else %}
+                        <span class="badge badge-danger">失败</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <form method="post" action="{{ url_for('admin.delete_import_log_page', log_id=log.id) }}" class="d-inline">
+                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('确认删除？')"><i class="fas fa-trash"></i></button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    
+    {% if total_pages > 1 %}
+    <div class="d-flex justify-content-center mt-3">
+        {% for p in range(1, total_pages + 1) %}
+        <a href="?page={{ p }}" class="btn btn-sm {% if p == page %}btn-primary{% else %}btn-outline-primary{% endif %}" style="margin: 0 0.25rem;">{{ p }}</a>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+{% endif %}
+{% endblock %}

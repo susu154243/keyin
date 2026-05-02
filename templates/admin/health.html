@@ -1,0 +1,95 @@
+{% extends 'admin/base.html' %}
+{% block title %}数据健康检查{% endblock %}
+{% block content %}
+<div class="admin-header">
+    <h1><i class="fas fa-heartbeat"></i> 数据健康检查</h1>
+    <select id="subjectSelect" class="form-control" style="width: 200px;" onchange="window.location.href='?subject_id=' + this.value">
+        <option value="">选择科目</option>
+        {% for s in subjects %}
+        <option value="{{ s.id }}" {% if s.id == subject_id %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+    </select>
+</div>
+
+{% if results is none %}
+<div class="card">
+    <p class="text-muted">请选择科目开始检查</p>
+</div>
+{% else %}
+
+<!-- 异常 ID -->
+<div class="card mb-3">
+    <h3><i class="fas fa-exclamation-triangle" style="color: #f59e0b;"></i> 异常 ID（{{ results.abnormal_ids|length }}）</h3>
+    {% if results.abnormal_ids %}
+    <p class="text-muted mb-2">ID 格式应为 <code>数字.数字-数字</code>（如 2.2-60）</p>
+    <table class="table">
+        <thead><tr><th>ID</th><th>题干</th><th>分类ID</th><th>操作</th></tr></thead>
+        <tbody>
+            {% for q in results.abnormal_ids %}
+            <tr>
+                <td><code>{{ q.id }}</code></td>
+                <td class="text-truncate" style="max-width: 400px;">{{ q.stem }}</td>
+                <td>{{ q.category_id }}</td>
+                <td><a href="{{ url_for('admin.edit_question_page', qid=q.id) }}" class="btn btn-sm btn-info"><i class="fas fa-edit"></i> 编辑</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="text-success"><i class="fas fa-check-circle"></i> 无异常</p>
+    {% endif %}
+</div>
+
+<!-- 断号 -->
+<div class="card mb-3">
+    <h3><i class="fas fa-link" style="color: #6b7280;"></i> ID 断号（{{ results.gaps|length }} 个分类）</h3>
+    {% if results.gaps %}
+    <table class="table">
+        <thead><tr><th>分类ID</th><th>前缀</th><th>缺失序号</th><th>数量</th></tr></thead>
+        <tbody>
+            {% for g in results.gaps %}
+            <tr>
+                <td>{{ g.category_id }}</td>
+                <td><code>{{ g.prefix }}</code></td>
+                <td>
+                    {% if g.missing|length <= 20 %}
+                    {{ g.missing | join(', ') }}
+                    {% else %}
+                    {{ g.missing[:10] | join(', ') }} ... (共 {{ g.count }} 个)
+                    {% endif %}
+                </td>
+                <td>{{ g.count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="text-success"><i class="fas fa-check-circle"></i> 无断号</p>
+    {% endif %}
+</div>
+
+<!-- 孤儿记录 -->
+<div class="card">
+    <h3><i class="fas fa-unlink" style="color: #ef4444;"></i> 孤儿记录（{{ results.orphans|length }}）</h3>
+    {% if results.orphans %}
+    <p class="text-muted mb-2">题目引用的分类已不存在</p>
+    <table class="table">
+        <thead><tr><th>ID</th><th>题干</th><th>引用的分类ID</th><th>操作</th></tr></thead>
+        <tbody>
+            {% for q in results.orphans %}
+            <tr>
+                <td><code>{{ q.id }}</code></td>
+                <td class="text-truncate" style="max-width: 400px;">{{ q.stem }}</td>
+                <td>{{ q.category_id }}</td>
+                <td><a href="{{ url_for('admin.edit_question_page', qid=q.id) }}" class="btn btn-sm btn-info"><i class="fas fa-edit"></i> 编辑</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="text-success"><i class="fas fa-check-circle"></i> 无孤儿记录</p>
+    {% endif %}
+</div>
+
+{% endif %}
+{% endblock %}

@@ -42,8 +42,20 @@
             <a href="{{ url_for('admin.permissions') }}" class="{% if 'permission' in request.endpoint %}active{% endif %}">
                 <i class="fas fa-key"></i> 权限分配
             </a>
-            <a href="{{ url_for('admin.import_page') }}" class="{% if request.endpoint == 'admin.import_page' %}active{% endif %}">
+            <a href="{{ url_for('admin.import_page') }}" class="{% if request.endpoint == 'admin.import_page' or request.endpoint == 'admin.import_apkg' %}active{% endif %}">
                 <i class="fas fa-upload"></i> 批量导入
+            </a>
+            <a href="{{ url_for('admin.batch_ops') }}" class="{% if request.endpoint == 'admin.batch_ops' %}active{% endif %}">
+                <i class="fas fa-layer-group"></i> 批量操作
+            </a>
+            <a href="{{ url_for('admin.health_check') }}" class="{% if request.endpoint == 'admin.health_check' %}active{% endif %}">
+                <i class="fas fa-heartbeat"></i> 数据健康
+            </a>
+            <a href="{{ url_for('admin.import_logs_page') }}" class="{% if request.endpoint == 'admin.import_logs_page' %}active{% endif %}">
+                <i class="fas fa-clipboard-list"></i> 导入日志
+            </a>
+            <a href="{{ url_for('admin.study_limits_page') }}" class="{% if request.endpoint == 'admin.study_limits_page' %}active{% endif %}">
+                <i class="fas fa-clock"></i> 学习上限
             </a>
             <hr style="border-color: var(--gray-700); margin: 1rem 0;">
             <a href="{{ url_for('index') }}" target="_blank">
