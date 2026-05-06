@@ -125,11 +125,38 @@
             {% endif %}
         </div>
     {% endif %}
+    
+    <!-- ====== 底部互动区域：三个按钮 + 留言墙 ====== -->
+    <div class="interaction-section">
+        <div class="interaction-buttons">
+            <button type="button" id="feedbackBtn" class="interaction-btn btn-feedback">
+                <i class="fas fa-bug"></i> 题目纠错
+            </button>
+            <button type="button" id="noteBtn" class="interaction-btn btn-note"
+                    data-url="{{ url_for('manage_note', subject_id=subject_id, qid=question.id) }}">
+                <i class="fas fa-sticky-note"></i> 我的笔记
+            </button>
+            <button type="button" id="commentBtn" class="interaction-btn btn-comment-highlight"
+                    data-url="{{ url_for('question_comments', subject_id=subject_id, qid=question.id) }}">
+                <i class="fas fa-comments"></i> 留言板
+            </button>
+        </div>
+        
+        <!-- 留言墙（内联展示所有留言） -->
+        <div class="comment-wall">
+            <h4 class="comment-wall-title"><i class="fas fa-comments"></i> 留言墙</h4>
+            <div id="commentWallList" class="comment-wall-list">
+                <p class="comment-wall-loading">加载中...</p>
+            </div>
+            <div id="commentWallPagination" class="pagination"></div>
+        </div>
+    </div>
 </div>
 {% endif %}
 
 <style>
     .question-info { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; }
+    .question-actions-top { display: flex; align-items: center; }
     .option-label.option-correct { background-color: rgba(46, 196, 182, 0.1); border-color: var(--success-color); }
     .option-label.option-incorrect { background-color: rgba(230, 57, 70, 0.1); border-color: var(--danger-color); }
     .explanation-box { background-color: #f0f7ff; border-left: 4px solid var(--primary-color); padding: 1rem; margin: 1rem 0; border-radius: 0 var(--border-radius) var(--border-radius) 0; }
@@ -137,12 +164,8 @@
     .result-message { padding: 0.75rem 1rem; border-radius: var(--border-radius); margin-bottom: 1rem; }
     .result-correct { background-color: rgba(46, 196, 182, 0.1); color: var(--success-color); }
     .result-incorrect { background-color: rgba(230, 57, 70, 0.1); color: var(--danger-color); }
-    
-    /* 复习进度条 */
     .review-progress-bar .card { background-color: rgba(255,255,255,0.8); }
     .text-sm { font-size: 0.85rem; }
-    
-    /* SM-2 评分 */
     .rating-section { margin-top: 1.5rem; padding: 1.5rem; background-color: var(--gray-100); border-radius: var(--border-radius); }
     .rating-title { margin: 0 0 1rem; font-size: 1.1rem; color: var(--gray-700); }
     .rating-buttons { display: flex; gap: 0.75rem; justify-content: center; flex-wrap: wrap; }
@@ -153,5 +176,188 @@
     .rating-2:hover { border-color: #e9c46a; background-color: #fffde7; }
     .rating-3:hover { border-color: #2ec4b6; background-color: #e0f7f5; }
     .rating-4:hover { border-color: #4361ee; background-color: #e8edff; }
+    
+    /* ====== 底部互动区域 ====== */
+    .interaction-section {
+        margin-top: 2rem;
+        padding-top: 1.5rem;
+        border-top: 2px dashed var(--gray-300);
+    }
+    .interaction-buttons {
+        display: flex;
+        gap: 1rem;
+        justify-content: center;
+        flex-wrap: wrap;
+        margin-bottom: 1.5rem;
+    }
+    .interaction-btn {
+        padding: 0.75rem 1.5rem;
+        border: 2px solid;
+        border-radius: 8px;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        min-width: 140px;
+        text-align: center;
+    }
+    .interaction-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+    .btn-feedback { border-color: #e63946; color: #e63946; background: white; }
+    .btn-feedback:hover { background: #e63946; color: white; }
+    .btn-note { border-color: #17a2b8; color: #17a2b8; background: white; }
+    .btn-note:hover { background: #17a2b8; color: white; }
+    .btn-comment-highlight {
+        border-color: #4a90d9;
+        background: #4a90d9;
+        color: white;
+        animation: pulse 2s infinite;
+    }
+    .btn-comment-highlight:hover { background: #3a7bc8; border-color: #3a7bc8; }
+    @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(74,144,217,0.4); }
+        70% { box-shadow: 0 0 0 10px rgba(74,144,217,0); }
+        100% { box-shadow: 0 0 0 0 rgba(74,144,217,0); }
+    }
+    
+    /* 留言墙 */
+    .comment-wall {
+        background: #f8f9fa;
+        border-radius: 12px;
+        padding: 1.5rem;
+    }
+    .comment-wall-title {
+        margin: 0 0 1rem;
+        font-size: 1.1rem;
+        color: #333;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .comment-wall-title i { color: #4a90d9; }
+    .comment-wall-list { min-height: 60px; }
+    .comment-wall-loading { text-align: center; color: #999; margin: 1rem 0; }
+    .cw-item {
+        background: white;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+    .cw-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+    .cw-user { font-weight: 600; color: #333; font-size: 0.9rem; }
+    .cw-time { font-size: 0.8rem; color: #999; }
+    .cw-content { font-size: 0.95rem; color: #444; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+    .cw-content img { max-width: 100%; max-height: 200px; border-radius: 8px; margin-top: 0.5rem; }
+    .cw-delete { background: none; border: none; color: #e63946; font-size: 0.8rem; cursor: pointer; margin-top: 0.5rem; }
+    .cw-delete:hover { text-decoration: underline; }
+    .cw-empty { text-align: center; color: #999; padding: 1rem; }
+    .pagination { display: flex; gap: 4px; justify-content: center; margin-top: 1rem; }
+    .page-btn { padding: 4px 10px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer; }
+    .page-btn.active { background: #4a90d9; color: #fff; border-color: #4a90d9; }
+    
+    /* 弹窗 */
+    .modal-overlay {
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.5); z-index: 1000;
+        display: flex; align-items: center; justify-content: center;
+    }
+    .modal-content {
+        background: #fff; border-radius: 12px; width: 90%; max-width: 500px;
+        max-height: 85vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    }
+    .modal-content.modal-lg { max-width: 700px; }
+    .modal-header {
+        display: flex; justify-content: space-between; align-items: center;
+        padding: 1rem 1.5rem; border-bottom: 1px solid #eee;
+    }
+    .modal-header h3 { margin: 0; font-size: 1.1rem; }
+    .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666; }
+    .modal-body { padding: 1.5rem; }
+    .modal-footer { padding: 1rem 1.5rem; border-top: 1px solid #eee; display: flex; gap: 0.5rem; justify-content: flex-end; }
+    .form-control { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; box-sizing: border-box; }
+    .form-control:focus { outline: none; border-color: #4a90d9; box-shadow: 0 0 0 2px rgba(74,144,217,0.15); }
+    .char-count { text-align: right; font-size: 0.8rem; color: #999; margin-top: 4px; }
+    .upload-area { margin-top: 8px; }
+    .text-muted { color: #999; }
 </style>
+
+<!-- 纠错弹窗 -->
+<div class="modal-overlay" id="feedbackModal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-bug" style="color:#e63946;"></i> 题目纠错</h3>
+            <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <textarea id="feedbackContent" class="form-control" rows="5" placeholder="请描述题目中的错误或不妥之处..." oninput="updateCharCount('feedbackContent','feedbackCount')"></textarea>
+            <div class="char-count"><span id="feedbackCount">0</span>/500</div>
+            <div class="upload-area">
+                <label class="btn btn-sm btn-outline-secondary">
+                    <i class="fas fa-image"></i> 添加图片
+                    <input type="file" id="feedbackImage" accept="image/*" style="display:none;">
+                </label>
+            </div>
+            <div id="feedbackPreview"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline-secondary modal-close">取消</button>
+            <button id="feedbackSubmit" class="btn btn-danger" data-url="{{ url_for('submit_feedback', subject_id=subject_id, qid=question.id) }}">提交反馈</button>
+        </div>
+    </div>
+</div>
+
+<!-- 笔记弹窗 -->
+<div class="modal-overlay" id="noteModal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-sticky-note" style="color:#17a2b8;"></i> 我的笔记</h3>
+            <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <textarea id="noteContent" class="form-control" rows="5" placeholder="写下你的学习心得..." oninput="updateCharCount('noteContent','noteCount')"></textarea>
+            <div class="char-count"><span id="noteCount">0</span>/500</div>
+            <div class="upload-area">
+                <label class="btn btn-sm btn-outline-secondary">
+                    <i class="fas fa-image"></i> 添加图片
+                    <input type="file" id="noteImage" accept="image/*" style="display:none;">
+                </label>
+            </div>
+            <div id="notePreview"></div>
+            <p class="text-muted" style="font-size:0.8rem;margin-top:8px;">仅自己可见</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline-secondary modal-close">取消</button>
+            <button id="noteSave" class="btn btn-info" data-url="{{ url_for('manage_note', subject_id=subject_id, qid=question.id) }}">保存笔记</button>
+        </div>
+    </div>
+</div>
+
+<!-- 留言板弹窗（发布用） -->
+<div class="modal-overlay" id="commentModal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-pen" style="color:#4a90d9;"></i> 发布留言</h3>
+            <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <textarea id="commentContent" class="form-control" rows="4" placeholder="写下你对这道题的想法..." oninput="updateCharCount('commentContent','commentCount')"></textarea>
+            <div class="char-count"><span id="commentCount">0</span>/500</div>
+            <div class="upload-area">
+                <label class="btn btn-sm btn-outline-secondary">
+                    <i class="fas fa-image"></i> 添加图片
+                    <input type="file" id="commentImage" accept="image/*" style="display:none;">
+                </label>
+            </div>
+            <div id="commentPreview"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline-secondary modal-close">取消</button>
+            <button id="commentSubmit" class="btn btn-primary" data-url="{{ url_for('question_comments', subject_id=subject_id, qid=question.id) }}">
+                <i class="fas fa-paper-plane"></i> 发布
+            </button>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='question-features.js') }}?v=2"></script>
 {% endblock %}

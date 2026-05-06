@@ -32,7 +32,7 @@
                 <span class="question-difficulty difficulty-hard">困难</span>
                 {% endif %}
             </div>
-            <div class="question-stem">{{ question.stem }}</div>
+            <div class="question-stem">{{ question.stem | safe }}</div>
             <div class="options-list">
                 {% for opt_key, opt_val in question.options.items() %}
                 <div class="option-item">

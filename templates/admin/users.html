@@ -9,17 +9,21 @@
 <div class="card">
     <div class="table-container">
         <table class="table">
-            <thead><tr><th>ID</th><th>用户名</th><th>角色</th><th>状态</th><th>最后登录</th><th>操作</th></tr></thead>
+            <thead><tr><th>ID</th><th>用户名</th><th>手机号</th><th>角色</th><th>状态</th><th>最后登录</th><th>操作</th></tr></thead>
             <tbody>
                 {% for u in users %}
                 <tr>
                     <td>{{ u.id }}</td>
                     <td>{{ u.username }}</td>
+                    <td>{{ u.phone or '未填写' }}</td>
                     <td><span class="badge {% if u.role == 'admin' %}badge-danger{% else %}badge-primary{% endif %}">{{ u.role }}</span></td>
                     <td><span class="badge {% if u.status == 1 %}badge-success{% else %}badge-danger{% endif %}">{{ '正常' if u.status == 1 else '禁用' }}</span></td>
                     <td>{{ u.last_login or '未登录' }}</td>
                     <td>
                         <a href="{{ url_for('admin.user_permissions', user_id=u.id) }}" class="btn btn-sm btn-info"><i class="fas fa-key"></i> 权限</a>
+                        <form method="post" action="{{ url_for('admin.admin_reset_user_password', user_id=u.id) }}" class="d-inline">
+                            <button type="submit" class="btn btn-sm btn-warning" onclick="return confirm('重置用户 \"{{ u.username }}\" 的密码？')"><i class="fas fa-lock"></i> 重置密码</button>
+                        </form>
                         <form method="post" action="{{ url_for('admin.toggle_user', user_id=u.id) }}" class="d-inline">
                             <button type="submit" class="btn btn-sm {% if u.status == 1 %}btn-warning{% else %}btn-success{% endif %}">
                                 {{ '禁用' if u.status == 1 else '启用' }}

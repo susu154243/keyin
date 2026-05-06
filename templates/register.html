@@ -2,25 +2,184 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>注册 - 刻印</title>
+    <title>注册 - 刻印 KeyIn</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .auth-wrapper {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .auth-container {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+            padding: 32px;
+            width: 100%;
+            max-width: 480px;
+        }
+        .auth-logo {
+            text-align: center;
+            margin-bottom: 16px;
+        }
+        .auth-title {
+            text-align: center;
+            font-size: 1.5rem;
+            margin-bottom: 24px;
+            color: #333;
+        }
+        .auth-form {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .form-label {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #555;
+        }
+        .form-control {
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.2s;
+        }
+        .form-control:focus {
+            outline: none;
+            border-color: #4a90d9;
+            box-shadow: 0 0 0 2px rgba(74,144,217,0.15);
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .btn-primary {
+            background: #4a90d9;
+            color: #fff;
+        }
+        .btn-primary:hover {
+            background: #3a7bc8;
+        }
+        .btn-block {
+            width: 100%;
+        }
+        .auth-footer {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.9rem;
+            color: #666;
+        }
+        .auth-footer a {
+            color: #4a90d9;
+            text-decoration: none;
+        }
+        .auth-footer a:hover {
+            text-decoration: underline;
+        }
+        .alert {
+            padding: 10px 12px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-size: 0.9rem;
+        }
+        .alert-danger {
+            background: #fee;
+            color: #c00;
+            border: 1px solid #fcc;
+        }
+        .alert-info {
+            background: #eef;
+            color: #33c;
+            border: 1px solid #ccf;
+        }
+        .alert-success {
+            background: #efe;
+            color: #090;
+            border: 1px solid #cfc;
+        }
+        
+        /* 邀请码获取提示卡片 */
+        .invite-card {
+            background: linear-gradient(135deg, #fff5f5, #fff0f6);
+            border: 1px solid #ffe0e6;
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 20px;
+        }
+        .invite-card h3 {
+            margin: 0 0 12px;
+            font-size: 1rem;
+            color: #c41e3a;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .invite-card p {
+            margin: 0 0 8px;
+            font-size: 0.85rem;
+            color: #666;
+            line-height: 1.6;
+        }
+        .invite-card .xhs-name {
+            font-weight: 700;
+            color: #c41e3a;
+            font-size: 1rem;
+        }
+        .invite-card .xhs-img {
+            display: block;
+            max-width: 200px;
+            margin: 12px auto 0;
+            border-radius: 8px;
+            border: 2px solid #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        /* 邀请码输入框大写样式 */
+        .input-uppercase {
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: monospace;
+        }
+    </style>
 </head>
 <body>
     <div class="auth-wrapper">
         <div class="auth-container">
             <div class="auth-logo">
-                <i class="fas fa-user-plus" style="font-size: 3rem; color: var(--primary-color);"></i>
+                <i class="fas fa-user-plus" style="font-size: 3rem; color: var(--primary-color, #4a90d9);"></i>
             </div>
             <h1 class="auth-title">注册账号</h1>
             
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
                     {% for category, message in messages %}
-                        <div class="alert {% if category == 'error' %}alert-danger{% else %}alert-info{% endif %}">{{ message }}</div>
+                        <div class="alert {% if category == 'error' %}alert-danger{% elif category == 'success' %}alert-success{% else %}alert-info{% endif %}">{{ message }}</div>
                     {% endfor %}
                 {% endif %}
             {% endwith %}
+            
+            <!-- 邀请码获取提示 -->
+            <div class="invite-card">
+                <h3><i class="fas fa-key"></i> 如何获取邀请码？</h3>
+                <p>关注小红书账号：<span class="xhs-name">葱姜蒜的救赎</span></p>
+                <p>私信即可获取邀请码</p>
+                <img src="{{ url_for('static', filename='xiaohongshu.png') }}" alt="小红书：葱姜蒜的救赎" class="xhs-img">
+            </div>
             
             <form method="post" class="auth-form" id="registerForm">
                 <div class="form-group">
@@ -28,12 +187,35 @@
                     <input type="text" id="username" name="username" class="form-control" required minlength="3" placeholder="至少3个字符">
                 </div>
                 <div class="form-group">
+                    <label for="phone" class="form-label">手机号码</label>
+                    <input type="tel" id="phone" name="phone" class="form-control" required maxlength="11" pattern="^1[3-9]\d{9}$" placeholder="请输入11位手机号">
+                </div>
+                <div class="form-group">
                     <label for="password" class="form-label">密码</label>
-                    <input type="password" id="password" name="password" class="form-control" required minlength="6" placeholder="至少6个字符">
+                    <input type="password" id="password" name="password" class="form-control" required minlength="8" placeholder="至少8个字符">
                 </div>
                 <div class="form-group">
                     <label for="confirm_password" class="form-label">确认密码</label>
                     <input type="password" id="confirm_password" name="confirm_password" class="form-control" required placeholder="再次输入密码">
+                </div>
+                <div class="form-group">
+                    <label for="security_question" class="form-label">安全问题</label>
+                    <select id="security_question" name="security_question" class="form-control" required>
+                        <option value="">-- 请选择一个问题 --</option>
+                        <option value="1">你小学的名字？</option>
+                        <option value="2">你最好的朋友叫什么？</option>
+                        <option value="3">你最喜欢的颜色是什么？</option>
+                        <option value="4">你出生的城市是哪里？</option>
+                        <option value="5">你的第一只宠物叫什么？</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="security_answer" class="form-label">安全答案</label>
+                    <input type="text" id="security_answer" name="security_answer" class="form-control" required placeholder="用于找回密码，请牢记">
+                </div>
+                <div class="form-group">
+                    <label for="invitation_code" class="form-label">邀请码</label>
+                    <input type="text" id="invitation_code" name="invitation_code" class="form-control input-uppercase" required maxlength="15" placeholder="格式：KEYIN-XXXX-XXXX">
                 </div>
                 <button type="submit" class="btn btn-primary btn-block">
                     <i class="fas fa-user-plus"></i> 创建账号
@@ -42,6 +224,7 @@
             
             <div class="auth-footer">
                 <p>已有账号？ <a href="{{ url_for('login') }}">立即登录</a></p>
+                <p style="margin-top: 8px;"><a href="{{ url_for('forgot_password') }}">忘记密码？</a></p>
             </div>
         </div>
     </div>

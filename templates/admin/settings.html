@@ -1,0 +1,122 @@
+{% extends "admin/base.html" %}
+
+{% block title %}站点设置 - 刻印后台{% endblock %}
+
+{% block content %}
+<div class="admin-header">
+    <h1><i class="fas fa-cog"></i> 站点设置</h1>
+</div>
+
+<div style="background: white; border-radius: var(--border-radius); padding: 1.5rem; box-shadow: var(--box-shadow);">
+    <form method="post" action="{{ url_for('admin.admin_settings_save') }}">
+        
+        <!-- 首页欢迎区 -->
+        <div style="margin-bottom: 2rem;">
+            <h3 style="margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #eee;">
+                <i class="fas fa-home"></i> 首页欢迎区
+            </h3>
+        </div>
+        
+        <!-- 备案信息 -->
+        <div style="margin-bottom: 2rem;">
+            <h3 style="margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #eee;">
+                <i class="fas fa-shield-alt"></i> 备案信息
+            </h3>
+            
+            <div class="form-group">
+                <label for="icp_filing">ICP 备案号</label>
+                <input type="text" id="icp_filing" name="setting_icp_filing" 
+                       class="form-control" value="{{ settings.get('icp_filing', '') }}" 
+                       placeholder="苏ICP备2026024574号">
+                <small class="text-muted">填写后自动显示在网站底部，可链接到 beian.miit.gov.cn</small>
+            </div>
+            
+            <div class="form-group" style="margin-top: 1rem;">
+                <label for="police_filing">公安联网备案号</label>
+                <input type="text" id="police_filing" name="setting_police_filing" 
+                       class="form-control" value="{{ settings.get('police_filing', '') }}" 
+                       placeholder="苏公网安备 32010002020123号">
+                <small class="text-muted">审核通过后填写，可链接到 www.beian.gov.cn</small>
+            </div>
+        </div>
+        
+        <!-- 法律条款 -->
+        <div style="margin-bottom: 2rem;">
+            <h3 style="margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #eee;">
+                <i class="fas fa-file-contract"></i> 法律条款
+            </h3>
+            
+            <div class="form-group">
+                <label for="privacy_policy">隐私政策</label>
+                <textarea id="privacy_policy" name="setting_privacy_policy" 
+                          class="form-control form-control-lg" rows="12" 
+                          placeholder="留空则使用默认隐私政策">{{ settings.get('privacy_policy', '') }}</textarea>
+                <small class="text-muted">支持 HTML 标签（h2, p, ul, li 等）。留空时使用系统默认内容。</small>
+            </div>
+            
+            <div class="form-group" style="margin-top: 1rem;">
+                <label for="terms_of_service">用户协议</label>
+                <textarea id="terms_of_service" name="setting_terms_of_service" 
+                          class="form-control form-control-lg" rows="12" 
+                          placeholder="留空则使用默认用户协议">{{ settings.get('terms_of_service', '') }}</textarea>
+                <small class="text-muted">支持 HTML 标签（h2, p, ul, li 等）。留空时使用系统默认内容。</small>
+            </div>
+        </div>
+        
+        <!-- 首页欢迎区 -->
+        <div style="margin-bottom: 2rem;">
+            <h3 style="margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #eee;">
+                <i class="fas fa-home"></i> 首页欢迎区（旧区块，可删除）
+            </h3>
+            
+            <div class="form-group">
+                <label for="welcome_title">主标题</label>
+                <input type="text" id="welcome_title" name="setting_welcome_title" 
+                       class="form-control" value="{{ settings.get('welcome_title', '') }}" 
+                       placeholder="欢迎使用 刻印">
+                <small class="text-muted">支持 HTML</small>
+            </div>
+            
+            <div class="form-group" style="margin-top: 1rem;">
+                <label for="welcome_subtitle">副标题</label>
+                <input type="text" id="welcome_subtitle" name="setting_welcome_subtitle" 
+                       class="form-control" value="{{ settings.get('welcome_subtitle', '') }}" 
+                       placeholder="高效的在线刷题系统，助力学习提升">
+            </div>
+        </div>
+        
+        <button type="submit" class="btn btn-primary">
+            <i class="fas fa-save"></i> 保存设置
+        </button>
+    </form>
+</div>
+
+<!-- 预览 -->
+<div style="background: #f8f9fa; border-radius: var(--border-radius); padding: 1.5rem; margin-top: 1.5rem;">
+    <h3 style="margin: 0 0 1rem;"><i class="fas fa-eye"></i> 预览效果</h3>
+    <div style="background: white; border-radius: 8px; padding: 1.5rem; text-align: center;">
+        <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📖</div>
+        <h2 style="margin: 0 0 0.5rem;" id="previewTitle">{{ settings.get('welcome_title', '') | safe }}</h2>
+        <p style="color: #666; margin: 0;" id="previewSubtitle">{{ settings.get('welcome_subtitle', '') }}</p>
+    </div>
+</div>
+
+<script>
+// 实时预览
+document.getElementById('welcome_title').addEventListener('input', function() {
+    document.getElementById('previewTitle').innerHTML = this.value;
+});
+document.getElementById('welcome_subtitle').addEventListener('input', function() {
+    document.getElementById('previewSubtitle').textContent = this.value;
+});
+</script>
+
+<style>
+.form-group { display: flex; flex-direction: column; gap: 4px; }
+.form-group label { font-weight: 600; font-size: 0.9rem; }
+.form-control { padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; }
+.form-control:focus { outline: none; border-color: #4a90d9; box-shadow: 0 0 0 2px rgba(74,144,217,0.15); }
+.form-control-lg { font-family: 'Noto Sans SC', monospace; line-height: 1.6; }
+.text-muted { color: #999; font-size: 0.8rem; }
+</style>
+{% endblock %}

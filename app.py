@@ -13,6 +13,7 @@ from datetime import datetime
 
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, session, jsonify, abort)
+from urllib.parse import urlparse
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -24,9 +25,11 @@ from models import (
     set_user_session_token, clear_user_session_token,
     get_questions_by_category,
     get_review_progress,
-    update_review_schedule, get_review_schedule, is_question_mastered, get_db,
+    update_review_schedule, get_review_schedule, is_question_mastered, is_question_reinforce, get_db,
     get_due_today, get_study_progress, infer_quality, get_question_attempt_stats,
-    delete_review_schedule,
+    delete_review_schedule, reset_question_schedule, skip_review_interval,
+    is_question_in_reinforce, exit_reinforce_mode,
+    grant_user_license, revoke_user_license, check_user_license, get_user_licenses, get_all_licenses,
     get_stats_summary, get_daily_trend, get_heatmap_data,
     get_category_mastery, get_retention_curve,
     # 新增封装函数
@@ -39,15 +42,34 @@ from models import (
     get_unreviewed_questions, get_unreviewed_count, get_mastered_questions,
     hash_password, create_user, get_category, serialize_row,
     get_subject_category_stats,
+    get_learning_cards,
+    predict_review_result,
+    # 邮箱验证
+    # 邀请码注册
+    validate_invitation_code, use_invitation_code, set_user_security, create_user,
+    # 密码找回
+    get_user_by_username, create_password_reset_token, verify_and_consume_reset_token,
+    check_security_answer, reset_user_password, get_security_question_text,
+    # 权限
+    set_user_subject_permission,
 )
 from auth import login_required, get_current_user
 from admin import admin_bp
 
+# 题目互动功能：纠错/笔记/留言板
+from models import (
+    create_question_feedback, get_user_note, save_user_note,
+    create_comment, get_question_comments, delete_comment,
+)
+
 app = Flask(__name__)
+if not os.environ.get('SECRET_KEY'):
+    import logging
+    logging.getLogger('keyin').warning('未设置 SECRET_KEY 环境变量，每次重启后用户 session 将失效。请在 systemd service 中添加 Environment=SECRET_KEY=<固定值>。')
 app.secret_key = os.environ.get('SECRET_KEY', os.urandom(32).hex())
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('FLASK_ENV') != 'development'
 
 # 速率限制（内存存储，单机足够）
 # 关键：从 X-Forwarded-For 获取真实 IP（Nginx 反代后 remote_address 是 127.0.0.1）
@@ -78,9 +100,25 @@ def _check_subject_permission(user, subject_id):
     return True
 
 
+def _check_subject_license(f):
+    """装饰器：检查用户是否有科目的有效授权"""
+    from functools import wraps
+    @wraps(f)
+    def decorated_function(subject_id, *args, **kwargs):
+        user_id = session.get('user_id')
+        if not user_id:
+            return redirect(url_for('login'))
+        license_info = check_user_license(user_id, subject_id)
+        if not license_info['has_license'] or license_info['is_expired']:
+            flash('您没有该科目的使用授权，请联系管理员', 'error')
+            return redirect(url_for('index'))
+        return f(subject_id, *args, **kwargs)
+    return decorated_function
+
+
 
 def parse_options(options_str):
-    """解析选项字符串为字典"""
+    """解析选项字符串为字典 {A: 内容, B: 内容, ...}"""
     if not options_str:
         return {}
     if isinstance(options_str, dict):
@@ -89,9 +127,23 @@ def parse_options(options_str):
         parsed = json.loads(options_str)
         if isinstance(parsed, dict):
             return parsed
+        # 数组格式：["内容A", "内容B", ...] -> {A: 内容A, B: 内容B, ...}
+        if isinstance(parsed, list):
+            labels = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            return {labels[i]: parsed[i] for i in range(len(parsed)) if i < len(labels)}
     except (json.JSONDecodeError, TypeError):
         pass
     return {}
+
+
+@app.context_processor
+def inject_site_settings():
+    from models import get_all_site_settings as _get_settings
+    settings = _get_settings()
+    return {
+        'icp_filing': settings.get('icp_filing', ''),
+        'police_filing': settings.get('police_filing', ''),
+    }
 
 
 # ==================== 认证路由 ====================
@@ -104,6 +156,10 @@ def login():
         password = request.form.get('password', '')
         user = authenticate_user(username, password)
         if user:
+            # 清除旧 session 数据，防止切换账号后数据泄漏
+            session.pop('practice', None)
+            session.pop('chapter_progress', None)
+            session.pop('reinforce', None)
             import secrets
             token = secrets.token_hex(32)
             session['user_id'] = user['id']
@@ -113,33 +169,67 @@ def login():
             update_user_last_login(user['id'])
             set_user_session_token(user['id'], token)
             next_url = request.args.get('next', url_for('index'))
+            parsed = urlparse(next_url)
+            if parsed.netloc:
+                next_url = url_for('index')
             return redirect(next_url)
         flash('用户名或密码错误', 'error')
     return render_template('login.html')
 
 
 @app.route('/register', methods=['GET', 'POST'])
+@limiter.limit("3 per hour")
 def register():
     if request.method == 'POST':
+        import re
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         confirm_password = request.form.get('confirm_password', '')
+        phone = request.form.get('phone', '').strip()
+        invitation_code = request.form.get('invitation_code', '').strip().upper()
+        security_question = request.form.get('security_question', '').strip()
+        security_answer = request.form.get('security_answer', '').strip()
         
+        # 表单验证
         if not username or not password:
             flash('用户名和密码不能为空', 'error')
         elif password != confirm_password:
             flash('两次输入的密码不一致', 'error')
         elif len(username) < 3:
             flash('用户名至少需要3个字符', 'error')
-        elif len(password) < 6:
-            flash('密码至少需要6个字符', 'error')
+        elif len(password) < 8:
+            flash('密码至少需要8个字符', 'error')
+        elif not security_question:
+            flash('请选择一个安全问题', 'error')
+        elif not security_answer:
+            flash('请填写安全答案', 'error')
+        elif not phone:
+            flash('请输入手机号码', 'error')
+        elif not re.match(r'^1[3-9]\d{9}$', phone):
+            flash('请输入正确的11位手机号', 'error')
+        elif not invitation_code:
+            flash('请输入邀请码', 'error')
         else:
-            result = create_user(username, password, 'user')
-            if result:
-                flash('注册成功，请登录', 'success')
-                return redirect(url_for('login'))
+            # 验证邀请码
+            valid, msg, code_record = validate_invitation_code(invitation_code)
+            if not valid:
+                flash(f'邀请码无效：{msg}', 'error')
             else:
-                flash('用户名已存在', 'error')
+                # 创建用户
+                result = create_user(username, password, 'user', email=None, phone=phone)
+                if result:
+                    # 设置安全问题
+                    set_user_security(result, security_question, security_answer)
+                    # 通过邀请码授权对应科目（有效期）
+                    grant_user_license(result, subject_id=code_record['subject_id'], days=code_record['days'])
+                    # 授予科目访问权限（让首页能看到该科目）
+                    set_user_subject_permission(result, code_record['subject_id'], can_practice=1, can_mock=1, can_daily=1, can_manage=0)
+                    # 标记邀请码已使用
+                    use_invitation_code(code_record['id'], result)
+                    flash('注册成功！请登录', 'success')
+                    return redirect(url_for('login'))
+                else:
+                    flash('用户名已存在', 'error')
     return render_template('register.html')
 
 
@@ -150,6 +240,91 @@ def logout():
         clear_user_session_token(user_id)
     session.clear()
     return redirect(url_for('login'))
+
+
+# ==================== 密码找回路由 ====================
+
+@app.route('/forgot-password', methods=['GET', 'POST'])
+@limiter.limit("3 per hour", methods=["POST"])
+def forgot_password():
+    """忘记密码：两步验证——先输入用户名 → 显示安全问题 → 再填写答案"""
+    step = request.args.get('step', '1')
+    username = request.args.get('username', '')
+    
+    if request.method == 'POST':
+        if step == '1':
+            # 第一步：用户输入用户名，查询并展示安全问题
+            username = request.form.get('username', '').strip()
+            if not username:
+                flash('请输入用户名', 'error')
+            else:
+                user = get_user_by_username(username)
+                if not user:
+                    flash('用户不存在', 'error')
+                elif not user.get('security_question'):
+                    flash('该用户未设置安全问题，请联系管理员重置密码', 'error')
+                else:
+                    # 找到用户，进入第二步
+                    return redirect(url_for('forgot_password', step='2', username=username))
+        else:
+            # 第二步：用户回答安全问题
+            security_answer = request.form.get('security_answer', '').strip()
+            if not security_answer:
+                flash('请填写安全答案', 'error')
+            else:
+                user = get_user_by_username(username)
+                if not user:
+                    flash('用户不存在', 'error')
+                elif check_security_answer(user['id'], user['security_question'], security_answer):
+                    # 答案正确，生成重置 token 并跳转到重置页面
+                    token = create_password_reset_token(user['id'])
+                    return redirect(url_for('reset_password_page', token=token))
+                else:
+                    flash('安全答案不正确', 'error')
+    
+    # 渲染页面
+    security_question = None
+    if step == '2' and username:
+        user = get_user_by_username(username)
+        if user:
+            security_question = get_security_question_text(user['security_question'])
+    
+    return render_template('forgot_password.html', step=step, username=username, security_question=security_question)
+
+
+@app.route('/reset-password', methods=['GET', 'POST'])
+@limiter.limit("3 per hour", methods=["POST"])
+def reset_password_page():
+    """密码重置页面（通过 token 访问）"""
+    token = request.args.get('token', '')
+    if request.method == 'POST':
+        token = request.form.get('token', '')
+    
+    if not token:
+        flash('重置链接无效', 'error')
+        return redirect(url_for('forgot_password'))
+    
+    user_id = verify_and_consume_reset_token(token)
+    if not user_id:
+        flash('重置链接已过期或无效，请重新申请', 'error')
+        return redirect(url_for('forgot_password'))
+    
+    if request.method == 'POST':
+        new_password = request.form.get('new_password', '')
+        confirm_password = request.form.get('confirm_password', '')
+        
+        if not new_password or not confirm_password:
+            flash('请输入新密码', 'error')
+        elif new_password != confirm_password:
+            flash('两次输入的密码不一致', 'error')
+        elif len(new_password) < 8:
+            flash('密码至少需要8个字符', 'error')
+        else:
+            reset_user_password(user_id, new_password)
+            flash('密码重置成功！请登录', 'success')
+            return redirect(url_for('login'))
+    
+    return render_template('reset_password.html')
 
 
 @app.route('/robots.txt')
@@ -166,16 +341,52 @@ def index():
     user = get_current_user()
     if not user:
         return redirect(url_for('login'))
-    
+
+    # 所有用户都显示全部启用科目，标记授权状态
+    subjects = get_all_subjects()
+
+    # 获取用户有权限的科目 ID 集合
     if user['role'] == 'admin':
-        subjects = get_all_subjects()
+        allowed_ids = set(s['id'] for s in subjects)
     else:
-        subjects = get_user_subjects(user['id'])
+        user_subs = get_user_subjects(user['id'])
+        allowed_ids = set(s['id'] for s in user_subs)
+
+    # 获取每个科目的授权信息
+    subjects_with_license = []
+    for s in subjects:
+        sid = s['id']
+        s_dict = dict(s)
+        s_dict['has_permission'] = sid in allowed_ids
+        if s_dict['has_permission']:
+            license_info = check_user_license(user['id'], sid)
+            s_dict['license_info'] = license_info
+        else:
+            s_dict['license_info'] = None
+        # 获取 level，默认 2（中级）
+        s_dict['level'] = s_dict.get('level', 2) or 2
+        subjects_with_license.append(s_dict)
+
+    # 按授权 + 级别分组
+    authorized = [s for s in subjects_with_license if s['has_permission']]
+    not_authorized = [s for s in subjects_with_license if not s['has_permission']]
     
-    if not subjects:
-        flash('您暂无可用科目，请联系管理员', 'info')
-    
-    return render_template('index.html', subjects=subjects, current_year=datetime.now().year)
+    advanced = [s for s in not_authorized if s['level'] == 1]
+    intermediate = [s for s in not_authorized if s['level'] == 2]
+    primary = [s for s in not_authorized if s['level'] == 3]
+
+    # 获取站点设置（首页欢迎语）
+    from models import get_all_site_settings
+    site_settings = get_all_site_settings()
+
+    return render_template('index.html',
+                          subjects=authorized,
+                          advanced=advanced,
+                          intermediate=intermediate,
+                          primary=primary,
+                          current_year=datetime.now().year,
+                          welcome_title=site_settings.get('welcome_title', '欢迎使用 刻印'),
+                          welcome_subtitle=site_settings.get('welcome_subtitle', '高效的在线刷题系统，助力学习提升'))
 
 
 # ==================== 科目详情页 ====================
@@ -257,6 +468,7 @@ def practice(subject_id):
 
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>')
 @login_required
+@_check_subject_license
 def practice_category(subject_id, category_id):
     """按分类答题入口：重定向到学习设置页"""
     cat = get_category(category_id)
@@ -268,8 +480,32 @@ def practice_category(subject_id, category_id):
 
 # ==================== 章节练习：模式选择 + 考试/练习模式 ====================
 
+def _next_review_label(next_review_str):
+    """根据 next_review 字符串生成易读标签"""
+    from datetime import datetime as dt
+    now = dt.now()
+    nr = dt.strptime(next_review_str, '%Y-%m-%d %H:%M:%S')
+    diff = nr - now
+    days = diff.days
+    seconds = diff.seconds
+    
+    if days < 0:
+        return '已过期'
+    elif days == 0:
+        hours = seconds // 3600
+        if hours < 1:
+            mins = seconds // 60
+            return f'{mins}分钟后可复习' if mins > 0 else '可复习'
+        return f'{hours}小时后可复习'
+    elif days == 1:
+        return '明天可复习'
+    else:
+        return f'{days}天后可复习'
+
+
 @app.route('/subjects/<int:subject_id>/study/<int:category_id>/setup')
 @login_required
+@_check_subject_license
 def study_setup(subject_id, category_id):
     """学习设置页：今日复习 + 进度展示 + 模式选择"""
     cat = get_category(category_id)
@@ -277,6 +513,12 @@ def study_setup(subject_id, category_id):
         abort(404)
     subject = get_subject_by_id(subject_id)
     user_id = session['user_id']
+
+    # 授权检查
+    license_info = check_user_license(user_id, subject_id)
+    if not license_info['has_license'] or license_info['is_expired']:
+        flash('您没有该科目的使用授权，请联系管理员', 'error')
+        return redirect(url_for('index'))
 
     # 学习进度统计
     progress = get_study_progress(user_id, category_id)
@@ -289,8 +531,10 @@ def study_setup(subject_id, category_id):
     # 今日待复习题目列表
     due_today_list = get_due_today(user_id, category_id)
     # 为每题添加推断评分
+    due_today_ids = set()
     for d in due_today_list:
         d['inferred_quality'] = infer_quality(d)
+        due_today_ids.add(d['id'])
     
     # 学习/重学中的题目（倒计时）
     learning_cards = get_learning_cards(user_id, category_id)
@@ -304,11 +548,90 @@ def study_setup(subject_id, category_id):
     # 做题次数统计
     attempt_stats = get_question_attempt_stats(user_id, category_id)
 
-    # 上限检查
-    from models import can_do_new_question, can_do_review, get_study_limits
-    limits_info = get_study_limits(user_id, subject_id)
-    new_limit_info = can_do_new_question(user_id, subject_id)
-    review_limit_info = can_do_review(user_id, subject_id)
+    # 题目列表：全部分类题目 + 复习记录 + 做题统计
+    from datetime import date as date_mod, timedelta
+    today_str = date_mod.today().strftime('%Y-%m-%d')
+    tomorrow_str = (date_mod.today() + timedelta(days=1)).strftime('%Y-%m-%d')
+    due_map = {d['id']: d for d in due_today_list}
+    due_map_ids = due_map.keys()
+
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT q.id,
+               rs.card_state,
+               rs.next_review,
+               rs.stability,
+               rs.difficulty,
+               rs.repetitions,
+               rs.interval,
+               rs.learning_step,
+               rs.ease_factor
+        FROM questions q
+        LEFT JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
+        WHERE q.category_id = ?
+    """, (user_id, category_id))
+    all_questions = cur.fetchall()
+
+    # 做题统计快速查找
+    attempt_map = {s['id']: dict(s) for s in attempt_stats}
+
+    review_items = []
+    for q in all_questions:
+        qid = q['id']
+        cs = q['card_state']
+        nr = q['next_review']
+        stability = q['stability'] or 0
+        repetitions = q['repetitions'] or 0
+
+        # 计算新状态（优先级：已掌握 > 未学习 > 待复习 > 即将复习 > 学习中）
+        if stability >= 45 and repetitions >= 3:
+            filter_state = 'mastered'
+        elif cs is None:
+            filter_state = 'unlearned'
+        elif nr:
+            nr_date = nr[:10]  # 'YYYY-MM-DD'
+            if nr_date <= today_str:
+                filter_state = 'due'
+            elif nr_date <= tomorrow_str:
+                filter_state = 'soon'
+            else:
+                filter_state = 'learning'
+        else:
+            filter_state = 'learning'
+
+        stats = attempt_map.get(qid, {})
+        item = {
+            'id': qid,
+            'card_state': cs or '',
+            'next_review': nr or '',
+            'next_review_label': _next_review_label(nr) if nr else '-',
+            'stability': stability,
+            'difficulty': q['difficulty'],
+            'repetitions': repetitions,
+            'interval': q['interval'],
+            'learning_step': q['learning_step'] or 0,
+            'ease_factor': q['ease_factor'],
+            'is_due_today': qid in due_map_ids,
+            'filter_state': filter_state,
+            'attempt_count': stats.get('attempt_count', 0),
+            'accuracy': stats.get('accuracy', 0),
+            'last_quality': stats.get('last_quality'),
+            'inferred_quality': stats.get('inferred_quality') or due_map.get(qid, {}).get('inferred_quality'),
+        }
+        review_items.append(item)
+
+    # 按题目 ID 序号排序
+    def _sort_key(item):
+        qid = item.get('id', '')
+        try:
+            return int(qid.rsplit('-', 1)[-1])
+        except (ValueError, IndexError):
+            return 9999
+    review_items.sort(key=_sort_key)
+
+    # 授权状态
+    license_info = check_user_license(user_id, subject_id)
 
     return render_template('study_setup.html',
                           subject=subject, category=cat,
@@ -317,10 +640,9 @@ def study_setup(subject_id, category_id):
                           due_today_list=due_today_list,
                           answered_today=answered_today,
                           attempt_stats=attempt_stats,
-                          new_limit_info=new_limit_info,
-                          review_limit_info=review_limit_info,
-                          limits_info=limits_info,
-                          learning_cards=learning_cards)
+                          review_items=review_items,
+                          learning_cards=learning_cards,
+                          license_info=license_info)
 
 
 # 旧路由兼容：重定向到新学习设置页
@@ -337,13 +659,6 @@ def study_today_review(subject_id, category_id):
     cat = get_category(category_id)
     if not cat or cat['subject_id'] != subject_id:
         abort(404)
-    
-    # 检查复习上限
-    from models import can_do_review
-    limit_info = can_do_review(session['user_id'], subject_id)
-    if not limit_info['can_do']:
-        flash(f'⚠️ 今日复习已达上限（{limit_info["current"]}/{limit_info["limit"]}），请明天再来', 'warning')
-        return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
     
     due_today_list = get_due_today(session['user_id'], category_id)
     if not due_today_list:
@@ -394,6 +709,7 @@ def _get_all_chapter_questions(category_id, count=None):
 
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>/exam')
 @login_required
+@_check_subject_license
 def chapter_exam(subject_id, category_id):
     """考试模式：显示分类全部题目"""
     user = get_current_user()
@@ -439,7 +755,7 @@ def chapter_exam_submit(subject_id, category_id):
             is_correct = user_answer == q['answer']
         if is_correct:
             correct_count += 1
-        save_answer(user_id, q['id'], user_answer, 1 if is_correct else 0, subject_id)
+        save_answer(user_id, q['id'], user_answer, 1 if is_correct else 0, subject_id, source='exam')
         # 考过的题目全部进入复习计划（对=5分，错=0分）
         update_review_schedule(user_id, q['id'], subject_id, 5 if is_correct else 0)
         details.append({
@@ -464,6 +780,7 @@ def chapter_exam_submit(subject_id, category_id):
 
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>/practice')
 @login_required
+@_check_subject_license
 def chapter_practice_start(subject_id, category_id):
     """练习模式起始：初始化队列到 session"""
     user = get_current_user()
@@ -473,13 +790,6 @@ def chapter_practice_start(subject_id, category_id):
     cat = get_category(category_id)
     if not cat or cat['subject_id'] != subject_id:
         abort(404)
-    
-    # 检查新题上限
-    from models import can_do_new_question
-    limit_info = can_do_new_question(session['user_id'], subject_id)
-    if not limit_info['can_do']:
-        flash(f'⚠️ 今日新题已达上限（{limit_info["current"]}/{limit_info["limit"]}），请明天再来', 'warning')
-        return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
     
     count = request.args.get('count', type=int)
     questions, _ = _get_chapter_questions(subject_id, category_id, session['user_id'], count=count)
@@ -504,6 +814,7 @@ def chapter_practice_start(subject_id, category_id):
 
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>/practice/next')
 @login_required
+@_check_subject_license
 def chapter_practice_next(subject_id, category_id):
     """练习模式：从队列取下一题"""
     p = session.get('practice', {})
@@ -556,6 +867,12 @@ def chapter_practice_qid(subject_id, category_id, qid):
     answered_unique = set(p.get('answered', {}).keys()) - set(p.get('stubborn', []))
     remaining = initial_count - len(answered_unique)
 
+    # 预测各评分的调度结果
+    review_predictions = predict_review_result(session['user_id'], qid, subject_id)
+    # 强化标记
+    is_reinforce = is_question_reinforce(session['user_id'], qid)
+
+    is_study_card = not question.get('options') or question['options'] == '{}'
     return render_template('chapter_practice.html',
                           question=question,
                           subject=subject,
@@ -569,7 +886,10 @@ def chapter_practice_qid(subject_id, category_id, qid):
                           retry_counts=p.get('retry_count', {}),
                           answered_count=answered_count,
                           remaining=remaining if remaining > 0 else 0,
-                          completed_count=len(answered_unique))
+                          completed_count=len(answered_unique),
+                          review_predictions=review_predictions,
+                          is_reinforce=is_reinforce,
+                          is_study_card=is_study_card)
 
 
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>/practice/<qid>/answer', methods=['POST'])
@@ -580,10 +900,19 @@ def chapter_practice_answer(subject_id, category_id, qid):
     if not question:
         abort(404)
     question = dict(question)
-    user_answer = request.form.get('answer', '')
     correct_answer = question['answer']
 
-    if question['qtype_text'] == 'multiple':
+    # 学习卡片模式（案例分析/论文题，无选项）：跳过判断对错
+    options_dict = parse_options(question['options'])
+    is_study_card = not options_dict
+
+    if is_study_card:
+        is_correct = True
+        is_partial = False
+        result_msg = ''  # 学习卡片不需要"回答正确/错误"提示
+        user_answer = ''
+    elif question['qtype_text'] == 'multiple':
+        user_answer = ','.join(request.form.getlist('answer'))
         is_correct = set(user_answer) == set(correct_answer)
         # P2-10: 部分正确判定
         correct_set = set(correct_answer)
@@ -594,17 +923,36 @@ def chapter_practice_answer(subject_id, category_id, qid):
             is_partial = (not is_correct) and partial_ratio > 0
         else:
             is_partial = False
+        save_answer(session['user_id'], qid, user_answer, 1 if is_correct else 0, subject_id)
+        if is_correct:
+            result_msg = '回答正确！'
+        elif is_partial:
+            result_msg = f'部分正确。正确答案是：{correct_answer}'
+        else:
+            result_msg = f'回答错误。正确答案是：{correct_answer}'
     else:
+        user_answer = request.form.get('answer', '')
+        if not user_answer:
+            # 未选择答案，不允许提交
+            result_msg = '请先选择一个答案再提交'
+            queue = p.get('queue', [])
+            return render_template('practice.html',
+                                  question=question,
+                                  options=question['options'],
+                                  queue=queue,
+                                  current_qid=qid,
+                                  result_msg=result_msg,
+                                  subject_id=subject_id,
+                                  category_id=category_id,
+                                  progress=p.get('progress', {}),
+                                  practice_stats=p.get('practice_stats', {}))
         is_correct = user_answer == correct_answer
         is_partial = False
-
-    save_answer(session['user_id'], qid, user_answer, 1 if is_correct else 0, subject_id)
-    if is_correct:
-        result_msg = '回答正确！'
-    elif is_partial:
-        result_msg = f'部分正确。正确答案是：{correct_answer}'
-    else:
-        result_msg = f'回答错误。正确答案是：{correct_answer}'
+        save_answer(session['user_id'], qid, user_answer, 1 if is_correct else 0, subject_id)
+        if is_correct:
+            result_msg = '回答正确！'
+        else:
+            result_msg = f'回答错误。正确答案是：{correct_answer}'
 
     # 更新会话统计
     p = session.get('practice', {})
@@ -622,6 +970,10 @@ def chapter_practice_answer(subject_id, category_id, qid):
     if is_correct:
         if p.get('retry_count', {}).get(qid, 0) == 0:
             p['answered_correct_first'] = p.get('answered_correct_first', 0) + 1
+        # 答对：从队列头部弹出（防止用户跳过评分直接点下一题导致卡住）
+        queue = p.get('queue', [])
+        if queue and queue[0] == qid:
+            queue.pop(0)
     else:
         p['answered_wrong'] = p.get('answered_wrong', 0) + 1
         retry = p.get('retry_count', {}).get(qid, 0)
@@ -632,6 +984,8 @@ def chapter_practice_answer(subject_id, category_id, qid):
             if qid in p['queue']:
                 p['queue'].remove(qid)
             p['queue'].append(qid)
+            # 清除已答题记录，下次加载视为新题
+            p['answered'].pop(qid, None)
         else:
             # 3次重试仍然错，移入顽固题
             if qid in p['queue']:
@@ -651,6 +1005,10 @@ def chapter_practice_answer(subject_id, category_id, qid):
 
     # For template: split user_answer into list for `in` check
     user_answer_list = list(user_answer) if user_answer else []
+    review_predictions = predict_review_result(session['user_id'], qid, subject_id)
+    is_reinforce = is_question_reinforce(session['user_id'], qid)
+    is_study_card = not question.get('options')
+    is_answered = bool(result_msg) or is_study_card
     return render_template('chapter_practice.html',
                           question=question,
                           user_answer=user_answer,
@@ -669,18 +1027,20 @@ def chapter_practice_answer(subject_id, category_id, qid):
                           retry_counts=p.get('retry_count', {}),
                           answered_count=len(answered),
                           remaining=p.get('initial_count', 0) - len(set(answered.keys()) - set(p.get('stubborn', []))),
-                          completed_count=len(set(answered.keys()) - set(p.get('stubborn', []))))
+                          completed_count=len(set(answered.keys()) - set(p.get('stubborn', []))),
+                          review_predictions=review_predictions,
+                          is_reinforce=is_reinforce)
 
 
 @app.route('/subjects/<int:subject_id>/practice/<int:category_id>/practice/<qid>/rate', methods=['POST'])
 @login_required
 def chapter_practice_rate(subject_id, category_id, qid):
-    """练习模式：SM-2 评分 + 队列调度"""
+    """练习模式：FSRS 评分 + 队列调度"""
     quality = request.form.get('quality', type=int)
     if quality is None:
         return redirect(url_for('chapter_practice_next', subject_id=subject_id, category_id=category_id))
 
-    # 更新 SM-2 复习计划
+    # 更新 FSRS 复习计划
     update_review_schedule(session['user_id'], qid, subject_id, quality)
 
     # 根据评分调整队列
@@ -703,6 +1063,7 @@ def chapter_practice_rate(subject_id, category_id, qid):
             queue.remove(qid)
 
     # 移除当前题（如果还在队列头部）
+    # 答错时 answer handler 已将其移到队尾，rate 不应再 pop 队首（否则误弹其他题目）
     if queue and queue[0] == qid:
         queue.pop(0)
 
@@ -738,6 +1099,7 @@ def chapter_practice_skip(subject_id, category_id, qid):
             queue.remove(qid)
 
     # 移除当前题（如果还在队列头部）
+    # 答错时 answer handler 已将其移到队尾，skip 不应再 pop 队首（否则误弹其他题目）
     if queue and queue[0] == qid:
         queue.pop(0)
 
@@ -852,8 +1214,18 @@ def submit_answer(subject_id, qid):
         abort(404)
     
     question = dict(question)
-    user_answer = request.form.get('answer', '')
     correct_answer = question['answer']
+    
+    # 获取用户答案：多选题用 getlist，单选题用 get
+    if question['qtype_text'] == 'multiple':
+        user_answer = ','.join(request.form.getlist('answer'))
+    else:
+        user_answer = request.form.get('answer', '')
+    
+    # 未选择答案，不允许提交
+    if not user_answer:
+        flash('请先选择一个答案再提交', 'warning')
+        return redirect(url_for('show_question', subject_id=subject_id, qid=qid))
     
     # 判断是否正确（仅计算一次）
     if question['qtype_text'] == 'multiple':
@@ -883,7 +1255,7 @@ def submit_answer(subject_id, qid):
 @app.route('/subjects/<int:subject_id>/rate/<qid>', methods=['POST'])
 @login_required
 def rate_question(subject_id, qid):
-    """SM-2 评分：答完题后评分"""
+    """FSRS 评分：答完题后评分"""
     category_id = request.form.get('category_id', type=int)
     quality = request.form.get('quality', 3, type=int)
     
@@ -913,7 +1285,145 @@ def show_favorites(subject_id):
 def favorite_question(subject_id, qid):
     result = toggle_favorite(session['user_id'], qid, subject_id)
     flash('已收藏' if result else '已取消收藏', 'success')
-    return redirect(request.referrer or url_for('show_question', subject_id=subject_id, qid=qid))
+    fallback = url_for('show_question', subject_id=subject_id, qid=qid)
+    ref = request.referrer
+    if ref:
+        parsed = urlparse(ref)
+        if parsed.netloc:
+            ref = None
+    return redirect(ref or fallback)
+
+
+# ==================== 题目互动功能（纠错/笔记/留言板） ====================
+
+@app.route('/subjects/<int:subject_id>/question/<qid>/feedback', methods=['POST'])
+@login_required
+def submit_feedback(subject_id, qid):
+    """提交题目纠错反馈"""
+    data = request.get_json() if request.is_json else request.form
+    content = (data.get('content', '') or '').strip()
+    if not content or len(content) > 500:
+        return jsonify({'error': '内容不能为空且不超过500字'}), 400
+    
+    user = get_current_user()
+    image_path = data.get('image_path')
+    fid = create_question_feedback(str(qid), subject_id, user['id'], content, image_path)
+    return jsonify({'success': True, 'id': fid})
+
+
+@app.route('/subjects/<int:subject_id>/question/<qid>/note', methods=['GET', 'POST'])
+@login_required
+def manage_note(subject_id, qid):
+    """获取/保存笔记"""
+    user = get_current_user()
+    if request.method == 'GET':
+        note = get_user_note(str(qid), user['id'])
+        if note:
+            return jsonify({'success': True, 'note': note})
+        return jsonify({'success': True, 'note': None})
+    
+    # POST: 保存笔记
+    data = request.get_json() if request.is_json else request.form
+    content = (data.get('content', '') or '').strip()
+    if len(content) > 500:
+        return jsonify({'error': '笔记不超过500字'}), 400
+    
+    image_path = data.get('image_path')
+    save_user_note(str(qid), subject_id, user['id'], content, image_path)
+    return jsonify({'success': True})
+
+
+@app.route('/subjects/<int:subject_id>/question/<qid>/comments', methods=['GET', 'POST'])
+@login_required
+def question_comments(subject_id, qid):
+    """获取/创建留言"""
+    user = get_current_user()
+    if request.method == 'GET':
+        page = request.args.get('page', 1, type=int)
+        comments, total = get_question_comments(str(qid), page=page)
+        return jsonify({
+            'success': True,
+            'comments': comments,
+            'total': total,
+            'page': page
+        })
+    
+    # POST: 创建留言
+    data = request.get_json() if request.is_json else request.form
+    content = (data.get('content', '') or '').strip()
+    if not content or len(content) > 500:
+        return jsonify({'error': '内容不能为空且不超过500字'}), 400
+    
+    image_path = data.get('image_path')
+    cid = create_comment(str(qid), subject_id, user['id'], user['username'], content, image_path)
+    return jsonify({'success': True, 'id': cid})
+
+
+@app.route('/api/upload-image', methods=['POST'])
+@login_required
+def upload_image():
+    """上传图片（用于笔记/留言/纠错）"""
+    if 'image' not in request.files:
+        return jsonify({'error': '未上传图片'}), 400
+    
+    f = request.files['image']
+    if f.filename == '':
+        return jsonify({'error': '未选择文件'}), 400
+    
+    # 限制5MB
+    f.seek(0, 2)
+    size = f.tell()
+    f.seek(0)
+    if size > 5 * 1024 * 1024:
+        return jsonify({'error': '图片大小不能超过5MB'}), 400
+    
+    # 验证文件类型（扩展名 + magic 字节双重校验）
+    allowed = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+    ext = f.filename.rsplit('.', 1)[1].lower() if '.' in f.filename else ''
+    if ext not in allowed:
+        return jsonify({'error': '仅支持 png/jpg/jpeg/gif/webp 格式'}), 400
+    
+    # Magic 字节校验：读取文件头确认实际内容
+    magic_bytes = f.read(12)
+    f.seek(0)
+    is_image = False
+    if magic_bytes[:4] == b'\x89PNG':
+        is_image = True
+    elif magic_bytes[:3] == b'\xff\xd8\xff':
+        is_image = True
+    elif magic_bytes[:3] in (b'GIF',):
+        is_image = True
+    elif magic_bytes[:4] == b'RIFF' and magic_bytes[8:12] == b'WEBP':
+        is_image = True
+    if not is_image:
+        return jsonify({'error': '文件内容不是有效的图片格式'}), 400
+    
+    import secrets
+    filename = f"{secrets.token_hex(8)}.{ext}"
+    filepath = os.path.join('/keyin/static/uploads', filename)
+    f.save(filepath)
+    
+    return jsonify({'success': True, 'url': f'/static/uploads/{filename}'})
+
+
+@app.route('/subjects/<int:subject_id>/question/<qid>/delete-comment', methods=['POST'])
+@login_required
+def delete_user_comment(subject_id, qid):
+    """用户删除自己的留言"""
+    data = request.get_json()
+    comment_id = data.get('comment_id')
+    user = get_current_user()
+    
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id FROM question_comments WHERE id = ?", (comment_id,))
+    row = cur.fetchone()
+    conn.close()
+    
+    if row and row[0] == user['id']:
+        delete_comment(comment_id)
+        return jsonify({'success': True})
+    return jsonify({'error': '无权操作'}), 403
 
 
 @app.route('/subjects/<int:subject_id>/wrong')
@@ -928,6 +1438,7 @@ def wrong_questions(subject_id):
 
 @app.route('/subjects/<int:subject_id>/exams')
 @login_required
+@_check_subject_license
 def exam_years(subject_id):
     """历史真题 - 按年份选择"""
     subject = get_subject_by_id(subject_id)
@@ -1027,6 +1538,7 @@ def start_mock_exam(subject_id):
 
 @app.route('/subjects/<int:subject_id>/study/<int:category_id>/mastered')
 @login_required
+@_check_subject_license
 def mastered(subject_id, category_id):
     """已掌握题目列表页"""
     cat = get_category(category_id)
@@ -1052,6 +1564,71 @@ def unmaster_question(subject_id, category_id, qid):
     return redirect(url_for('mastered', subject_id=subject_id, category_id=category_id))
 
 
+@app.route('/subjects/<int:subject_id>/study/<int:category_id>/question/<qid>/reset', methods=['POST'])
+@login_required
+def reset_question(subject_id, category_id, qid):
+    """重置题目：删除复习计划 + 答题历史，回到新题状态"""
+    reset_question_schedule(session['user_id'], qid)
+    flash(f'题目 {qid} 已重置为新题', 'success')
+    return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
+
+
+@app.route('/subjects/<int:subject_id>/study/<int:category_id>/question/<qid>/skip', methods=['POST'])
+@login_required
+def skip_question_interval(subject_id, category_id, qid):
+    """直接复习：跳过间隔，立即进入该题的练习模式"""
+    # 强化题不能直接复习
+    if is_question_in_reinforce(session['user_id'], qid):
+        flash('该题目处于强化状态，请进入背题模式', 'warning')
+        return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
+    
+    # 将 next_review 设为 now
+    skip_review_interval(session['user_id'], qid)
+    
+    # 初始化单题练习会话
+    session['practice'] = {
+        'category_id': category_id,
+        'subject_id': subject_id,
+        'queue': [qid],
+        'retry_count': {},
+        'answered_correct_first': 0,
+        'answered_wrong': 0,
+        'stubborn': [],
+        'total_attempts': 0,
+        'initial_count': 1,
+        'is_today_review': True,
+        'answered': {},
+    }
+    return redirect(url_for('chapter_practice_qid', subject_id=subject_id, category_id=category_id, qid=qid))
+
+
+@app.route('/subjects/<int:subject_id>/study/<int:category_id>/question/<qid>/memorize')
+@login_required
+def memorize_mode(subject_id, category_id, qid):
+    """强化背题模式：显示完整题干+选项+答案+解析"""
+    question = get_question(qid)
+    if not question or question['subject_id'] != subject_id:
+        abort(404)
+    question = dict(question)
+    question['options'] = parse_options(question.get('options', '{}'))
+    
+    subject = get_subject_by_id(subject_id)
+    cat = get_category(category_id)
+    
+    return render_template('memorize_mode.html',
+                          question=question, subject=subject, category=cat,
+                          subject_id=subject_id, category_id=category_id)
+
+
+@app.route('/subjects/<int:subject_id>/study/<int:category_id>/question/<qid>/exit-reinforce', methods=['POST'])
+@login_required
+def exit_reinforce(subject_id, category_id, qid):
+    """退出强化状态"""
+    exit_reinforce_mode(session['user_id'], qid)
+    flash(f'题目 {qid} 已退出强化', 'success')
+    return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
+
+
 # ==================== 统计分析 ====================
 
 @app.route('/subjects/<int:subject_id>/statistics')
@@ -1065,21 +1642,24 @@ def statistics(subject_id):
 @app.route('/subjects/<int:subject_id>/stats/api')
 @login_required
 def stats_api(subject_id):
-    """统计分析 - JSON API（P2-7: 增加 SM-2 掌握数据）"""
+    """统计分析 - JSON API（P2-7: 增加 FSRS 掌握数据）"""
     user_id = session['user_id']
 
     summary = get_stats_summary(user_id, subject_id)
     daily = get_daily_trend(user_id, subject_id, days=30)
-    heatmap = get_heatmap_data(user_id, subject_id, days=90)
+    from models import get_year_heatmap, get_calendar_stats
+    from datetime import datetime as _dt
+    current_year = _dt.now().year
+    heatmap = get_year_heatmap(user_id, subject_id, current_year)
+    calendar_stats = get_calendar_stats(user_id, subject_id, current_year)
     categories = get_category_mastery(user_id, subject_id)
     retention = get_retention_curve(user_id, subject_id)
 
-    # P2-7: 掌握度统计（FSRS/SM-2 双模式）
+    # P2-7: 掌握度统计（FSRS）
     from models import _mastered_sql_condition
     conn = get_db()
     cur = conn.cursor()
-    from datetime import datetime
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    now = _dt.now().strftime('%Y-%m-%d %H:%M:%S')
     cur.execute(f"""
         SELECT COUNT(*) as mastered FROM review_schedule rs
         JOIN questions q ON q.id = rs.question_id
@@ -1104,21 +1684,24 @@ def stats_api(subject_id):
     total = cur.fetchone()['total']
     
     # P2-11: 工作负载预测
-    from models import predict_review_load
+    from models import predict_review_load, get_daily_learning_time, get_hourly_distribution
     load_forecast = predict_review_load(user_id, subject_id, days=30)
+    learning_time = get_daily_learning_time(user_id, subject_id, days=30)
+    hourly = get_hourly_distribution(user_id, subject_id, days=30)
     
-    # P2-13: 最优保留率推荐
-    from models import calculate_optimal_dr
-    dr_recommendation = calculate_optimal_dr(user_id, subject_id)
     conn.close()
 
     return jsonify({
         'summary': summary,
         'daily_trend': daily,
         'heatmap': heatmap,
+        'calendar_stats': calendar_stats,
+        'calendar_year': current_year,
+        'learning_time': learning_time,
+        'hourly_distribution': hourly,
         'category_mastery': categories,
         'retention_curve': retention,
-        'sm2_summary': {
+        'mastery_summary': {
             'total': total,
             'reviewed': reviewed,
             'mastered': mastered,
@@ -1126,23 +1709,37 @@ def stats_api(subject_id):
             'new': total - reviewed,
         },
         'load_forecast': load_forecast,
-        'dr_recommendation': dr_recommendation,
     })
 
 
-@app.route('/subjects/<int:subject_id>/apply-dr', methods=['POST'])
+@app.route('/subjects/<int:subject_id>/stats/calendar/<int:year>')
 @login_required
-def apply_dr(subject_id):
-    """一键应用推荐的目标保留率"""
-    from models import set_study_limits
+def stats_calendar(subject_id, year):
+    """获取指定年份的日历热力图数据"""
+    from models import get_year_heatmap, get_calendar_stats
     user_id = session['user_id']
-    data = request.get_json()
-    dr = data.get('desired_retention')
-    if dr is None or not (0.70 <= dr <= 0.98):
-        return jsonify({'success': False, 'error': 'DR 必须在 0.70~0.98 之间'}), 400
-    
-    set_study_limits(user_id, subject_id, desired_retention=dr)
-    return jsonify({'success': True, 'message': f'已设置 DR={dr:.2f}'})
+    heatmap = get_year_heatmap(user_id, subject_id, year)
+    calendar_stats = get_calendar_stats(user_id, subject_id, year)
+    return jsonify({
+        'year': year,
+        'heatmap': heatmap,
+        'calendar_stats': calendar_stats,
+    })
+
+
+# ==================== 名言API ====================
+
+@app.route('/quotes')
+def get_quotes():
+    """返回名言列表，用于分享卡片"""
+    import json
+    quotes_path = os.path.join(os.path.dirname(__file__), 'quotes.json')
+    try:
+        with open(quotes_path, 'r', encoding='utf-8') as f:
+            quotes = json.load(f)
+        return jsonify(quotes)
+    except Exception:
+        return jsonify([])
 
 
 # ==================== 旧路由兼容（重定向） ====================
@@ -1166,6 +1763,100 @@ def random_question_old():
 def show_history_old():
     flash('请使用科目导航查看历史', 'info')
     return redirect(url_for('index'))
+
+
+# ==================== 法律条款页面 ====================
+
+DEFAULT_PRIVACY = """<h2>一、信息收集</h2>
+<p>keyin心语（以下简称"本平台"）仅收集提供服务所必需的最少信息：</p>
+<ul>
+<li><strong>账号信息</strong>：用户名、密码（加密存储）、注册时间</li>
+<li><strong>学习数据</strong>：答题记录、错题记录、学习笔记、留言内容</li>
+<li><strong>设备信息</strong>：IP 地址（用于安全日志，不关联个人身份）</li>
+</ul>
+
+<h2>二、信息使用</h2>
+<p>收集的信息仅用于以下目的：</p>
+<ul>
+<li>提供考试学习和刷题服务</li>
+<li>生成学习统计和复习计划</li>
+<li>维护平台安全和正常运行</li>
+</ul>
+
+<h2>三、信息保护</h2>
+<ul>
+<li>密码采用 PBKDF2/SHA256 算法加密存储</li>
+<li>用户数据采用数据库访问控制保护</li>
+<li>不向任何第三方出售、出租或分享用户个人数据</li>
+</ul>
+
+<h2>四、Cookie 使用</h2>
+<p>本平台仅使用必要的登录 Cookie（Session）维持用户登录状态，关闭浏览器即失效。不用于跟踪、分析或广告目的。</p>
+
+<h2>五、数据保留与删除</h2>
+<p>用户数据在服务运行期间保留。如用户需要删除个人数据，请联系平台管理员。</p>
+
+<h2>六、未成年人保护</h2>
+<p>本平台不面向未成年人提供服务，不主动收集未成年人信息。</p>
+
+<h2>七、隐私政策更新</h2>
+<p>本政策可能不定期更新，重大变更将通过网站公告通知用户。</p>
+"""
+
+DEFAULT_TERMS = """<h2>一、服务说明</h2>
+<p>keyin心语是一个面向软考考生的在线学习平台，提供题库练习、复习计划、学习统计等功能。用户需通过邀请码注册方可使用。</p>
+
+<h2>二、用户行为规范</h2>
+<p>用户在使用本平台时需遵守以下规范：</p>
+<ul>
+<li>遵守中华人民共和国相关法律法规</li>
+<li>不得发布含有违法、暴力、色情、歧视等内容的留言或笔记</li>
+<li>不得利用本平台从事任何破坏系统安全的行为</li>
+<li>不得将账号转让、出售或分享给他人使用</li>
+<li>不得利用技术手段爬取、复制平台题库数据</li>
+</ul>
+
+<h2>三、内容管理</h2>
+<ul>
+<li>用户在平台发布的笔记、留言等内容，平台有权进行审核和管理</li>
+<li>对于违反规范的內容，平台有权删除并视情况限制账号使用</li>
+<li>用户需对自发布的内容承担法律责任</li>
+</ul>
+
+<h2>四、免责声明</h2>
+<ul>
+<li>平台题库内容仅供参考学习使用，不保证与官方考试内容的完全一致性</li>
+<li>平台不对因使用本服务导致的任何考试结果承担责任</li>
+<li>如因不可抗力或系统维护导致服务中断，平台不承担赔偿责任</li>
+</ul>
+
+<h2>五、知识产权</h2>
+<p>平台题库内容、界面设计、品牌标识等的知识产权归平台所有，未经授权不得复制、传播或用于商业用途。</p>
+
+<h2>六、协议修改</h2>
+<p>平台有权根据运营需要修改本协议，修改后的协议将在网站公示，继续使用即视为接受修改。</p>
+
+<h2>七、联系方式</h2>
+<p>如有任何问题或建议，请通过网站留言或联系平台管理员。</p>
+"""
+
+@app.route('/privacy')
+def privacy_policy():
+    from models import get_all_site_settings
+    settings = get_all_site_settings()
+    return render_template('privacy.html',
+                          privacy_content=settings.get('privacy_policy', ''),
+                          default_privacy=DEFAULT_PRIVACY,
+                          last_updated=settings.get('privacy_updated', '2026-05-06'))
+
+@app.route('/terms')
+def terms_of_service():
+    from models import get_all_site_settings
+    settings = get_all_site_settings()
+    return render_template('terms.html',
+                          terms_content=settings.get('terms_of_service', ''),
+                          default_terms=DEFAULT_TERMS,
+                          last_updated=settings.get('terms_updated', '2026-05-06'))
 
 
 # ==================== 错误处理 ====================

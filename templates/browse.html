@@ -207,7 +207,7 @@
             
             <!-- Question Stem Preview -->
             <div class="question-stem-preview">
-                <p class="question-stem-text mb-2">{{ question.stem[:150] }}{% if question.stem|length > 150 %}...{% endif %}</p>
+                <p class="question-stem-text mb-2">{{ (question.stem | striptags)[:150] }}{% if question.stem|length > 150 %}...{% endif %}</p>
             </div>
             
             <!-- Expanded Content (Initially Hidden) -->
@@ -217,7 +217,7 @@
                 <!-- Full Question Stem -->
                 <div class="question-full-content mb-3">
                     <h6 class="text-primary">题目内容：</h6>
-                    <p class="question-full-text">{{ question.stem }}</p>
+                    <p class="question-full-text">{{ question.stem | safe }}</p>
                 </div>
                 
                 <!-- Options -->
@@ -290,9 +290,9 @@
             
             <!-- Question Stem -->
             <div class="mobile-question-stem">
-                <p class="mobile-stem-preview">{{ question.stem[:120] }}{% if question.stem|length > 120 %}...{% endif %}</p>
+                <p class="mobile-stem-preview">{{ (question.stem | striptags)[:120] }}{% if question.stem|length > 120 %}...{% endif %}</p>
                 <div class="mobile-stem-full" style="display: none;">
-                    <p>{{ question.stem }}</p>
+                    <p>{{ question.stem | safe }}</p>
                 </div>
             </div>
             

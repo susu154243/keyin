@@ -51,8 +51,8 @@ def authenticate_user(username, password):
     pw_hash = user['password_hash']
     match = False
     
-    # 新版 Werkzeug 支持的所有格式（pbkdf2、scrypt 等）
-    if pw_hash.startswith(('pbkdf2:', 'scrypt:', 'argon2:')):
+    # 尝试新版 Werkzeug pbkdf2
+    if pw_hash.startswith('pbkdf2:'):
         match = check_password_hash(pw_hash, password)
     # 兼容旧版 sha256（无盐值），验证后自动升级
     elif len(pw_hash) == 64:
@@ -94,20 +94,18 @@ def get_user_subjects(user_id):
 def get_all_users():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT id, username, phone, role, status, last_login FROM users ORDER BY id")
+    cur.execute("SELECT id, username, role, status, last_login FROM users ORDER BY id")
     result = cur.fetchall()
     conn.close()
     return result
 
 
-def create_user(username, password, role='user', email=None, phone=None):
+def create_user(username, password, role='user'):
     conn = get_db()
     cur = conn.cursor()
     try:
-        # 如果提供了邮箱，status=0（待验证），否则 status=1（直接激活）
-        status = 0 if email else 1
-        cur.execute("INSERT INTO users (username, password_hash, role, status, email, phone) VALUES (?, ?, ?, ?, ?, ?)",
-                    (username, hash_password(password), role, status, email, phone))
+        cur.execute("INSERT INTO users (username, password_hash, role, status) VALUES (?, ?, ?, 1)",
+                    (username, hash_password(password), role))
         conn.commit()
         return cur.lastrowid
     except sqlite3.IntegrityError:
@@ -124,78 +122,12 @@ def update_user_status(user_id, status):
     conn.close()
 
 
-# ==================== 邮箱验证相关 ====================
-
-def set_user_verification(user_id: int, token: str, expires: str):
-    """保存用户邮箱验证 token 和过期时间"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE users SET verification_token = ?, verification_expires = ? WHERE id = ?",
-                (token, expires, user_id))
-    conn.commit()
-    conn.close()
-
-
-def get_user_by_token(token: str):
-    """根据验证 token 获取用户"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE verification_token = ?", (token,))
-    user = cur.fetchone()
-    conn.close()
-    return user
-
-
-def verify_email(user_id: int) -> bool:
-    """验证邮箱：设置 status=1, email_verified=1，清除 token"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE users SET status = 1, email_verified = 1, verification_token = NULL, verification_expires = NULL WHERE id = ?",
-                (user_id,))
-    conn.commit()
-    changed = cur.rowcount > 0
-    conn.close()
-    return changed
-
-
-def update_user_email(user_id: int, email: str, token: str, expires: str) -> bool:
-    """更新用户邮箱（用于老用户首次绑定）"""
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        cur.execute("UPDATE users SET email = ?, email_verified = 0, verification_token = ?, verification_expires = ? WHERE id = ?",
-                    (email, token, expires, user_id))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
-
-
-def get_user_email_status(user_id: int):
-    """获取用户邮箱状态"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT email, email_verified FROM users WHERE id = ?", (user_id,))
-    result = cur.fetchone()
-    conn.close()
-    return result
-
-
 def update_user_last_login(user_id):
-    import time
-    for attempt in range(3):
-        try:
-            conn = get_db()
-            cur = conn.cursor()
-            cur.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?", (user_id,))
-            conn.commit()
-            conn.close()
-            return
-        except Exception:
-            conn.close()
-            time.sleep(0.2)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
 
 
 def set_user_session_token(user_id, token):
@@ -209,18 +141,11 @@ def set_user_session_token(user_id, token):
 
 def clear_user_session_token(user_id):
     """清除用户 session token"""
-    import time
-    for attempt in range(3):
-        try:
-            conn = get_db()
-            cur = conn.cursor()
-            cur.execute("UPDATE users SET session_token = NULL WHERE id = ?", (user_id,))
-            conn.commit()
-            conn.close()
-            return
-        except Exception:
-            conn.close()
-            time.sleep(0.2)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE users SET session_token = NULL WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
 
 
 def verify_session_token(user_id, token):
@@ -302,47 +227,10 @@ def update_subject(subject_id, name=None, code=None, description=None, icon=None
         fields.append("status = ?")
         values.append(status)
     if fields:
-        fields.append("updated_at = CURRENT_TIMESTAMP")
         values.append(subject_id)
         cur.execute(f"UPDATE subjects SET {', '.join(fields)} WHERE id = ?", values)
         conn.commit()
     conn.close()
-
-
-def delete_subject(subject_id):
-    """删除科目。返回 (成功bool, 错误信息)"""
-    conn = get_db()
-    cur = conn.cursor()
-    # 检查分类
-    cur.execute("SELECT COUNT(*) FROM categories WHERE subject_id = ?", (subject_id,))
-    cat_count = cur.fetchone()[0]
-    if cat_count > 0:
-        conn.close()
-        return False, f'该科目下有 {cat_count} 个分类，请先删除分类'
-    # 检查授权
-    cur.execute("SELECT COUNT(*) FROM user_licenses WHERE subject_id = ?", (subject_id,))
-    lic_count = cur.fetchone()[0]
-    if lic_count > 0:
-        conn.close()
-        return False, f'该科目有 {lic_count} 个活跃授权，请先撤销授权'
-    cur.execute("DELETE FROM subjects WHERE id = ?", (subject_id,))
-    conn.commit()
-    conn.close()
-    return True, None
-
-
-def get_subject_stats(subject_id):
-    """获取科目的统计信息：分类数、题目数、授权用户数"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM categories WHERE subject_id = ?", (subject_id,))
-    cat_count = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM questions WHERE category_id IN (SELECT id FROM categories WHERE subject_id = ?)", (subject_id,))
-    q_count = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM user_licenses WHERE subject_id = ?", (subject_id,))
-    lic_count = cur.fetchone()[0]
-    conn.close()
-    return {'categories': cat_count, 'questions': q_count, 'licenses': lic_count}
 
 
 # ==================== 分类相关 ====================
@@ -432,44 +320,6 @@ def delete_category(category_id):
     conn.close()
 
 
-# 允许的 HTML 标签白名单（用于净化题干/解析/选项）
-SANITIZE_ALLOWED_TAGS = frozenset({
-    'br', 'p', 'b', 'strong', 'i', 'em', 'u', 'sub', 'sup',
-    'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'thead', 'tbody',
-    'img', 'span', 'div', 'a', 'font', 'center', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-    'code', 'pre', 'blockquote', 'hr', 'strike',
-})
-
-
-def sanitize_html(text: str) -> str:
-    """净化 HTML：移除 <script>、<iframe>、事件属性等危险内容，保留安全标签。
-    
-    用于题干、选项、解析等用户输入内容的净化。
-    """
-    if not text:
-        return text
-    
-    import re
-    
-    # 1. 移除危险标签及其内容
-    text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<iframe[^>]*>.*?</iframe>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<object[^>]*>.*?</object>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<embed[^>]*>.*?</embed>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<form[^>]*>.*?</form>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    
-    # 2. 移除所有 HTML 标签的事件属性 (onclick, onerror, onload 等)
-    text = re.sub(r'\s*on\w+\s*=\s*["\'][^"\']*["\']', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'\s*on\w+\s*=\s*\S+', '', text, flags=re.IGNORECASE)
-    
-    # 3. 移除 javascript: 和 data: 协议的 href/src
-    text = re.sub(r'(href|src)\s*=\s*["\']\s*javascript:[^"\']*["\']', r'\1=""', text, flags=re.IGNORECASE)
-    text = re.sub(r'(href|src)\s*=\s*["\']\s*data:[^"\']*["\']', r'\1=""', text, flags=re.IGNORECASE)
-    text = re.sub(r'(href|src)\s*=\s*javascript:\S+', r'\1=""', text, flags=re.IGNORECASE)
-    
-    return text
-
-
 # ==================== 题目相关 ====================
 
 def get_question(qid):
@@ -492,7 +342,7 @@ def get_questions_by_category(category_id, status=1):
     return result
 
 
-def get_questions_by_subject(subject_id, status=1, page=1, per_page=20, search='', category_id=None):
+def get_questions_by_subject(subject_id, status=1, page=1, per_page=20, search=''):
     """分页获取题目（管理端用）"""
     conn = get_db()
     cur = conn.cursor()
@@ -505,10 +355,6 @@ def get_questions_by_subject(subject_id, status=1, page=1, per_page=20, search='
         escaped = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         where += " AND (q.stem LIKE ? ESCAPE '\\' OR q.id LIKE ? ESCAPE '\\')"
         params.extend([f"%{escaped}%", f"%{escaped}%"])
-
-    if category_id:
-        where += " AND q.category_id = ?"
-        params.append(category_id)
 
     cur.execute(f"SELECT COUNT(*) as total FROM questions q WHERE {where}", params)
     total = cur.fetchone()['total']
@@ -527,23 +373,11 @@ def get_questions_by_subject(subject_id, status=1, page=1, per_page=20, search='
 
 
 def create_question(data):
-    """创建题目（自动净化 stem/options/explanation）"""
+    """创建题目"""
     import uuid
     conn = get_db()
     cur = conn.cursor()
     qid = data.get('id') or str(uuid.uuid4())[:8]
-    
-    # 净化 HTML 字段
-    stem = sanitize_html(data.get('stem') or '')
-    options_raw = data.get('options', '{}')
-    try:
-        options_dict = json.loads(options_raw) if options_raw else {}
-        options_dict = {k: sanitize_html(v) for k, v in options_dict.items()}
-        options = json.dumps(options_dict, ensure_ascii=False)
-    except (json.JSONDecodeError, TypeError):
-        options = options_raw
-    explanation = sanitize_html(data.get('explanation') or '')
-    
     cur.execute("""
         INSERT INTO questions (
             id, stem, options, answer, explanation, qtype, difficulty,
@@ -551,10 +385,10 @@ def create_question(data):
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
     """, (
         qid,
-        stem,
-        options,
+        data.get('stem'),
+        data.get('options', '{}'),
         data.get('answer'),
-        explanation,
+        data.get('explanation', ''),
         data.get('qtype', 'single'),
         data.get('difficulty', '无'),
         data.get('subject_id'),
@@ -562,7 +396,7 @@ def create_question(data):
         data.get('is_real_exam', 0),
         data.get('exam_year'),
         data.get('source', 'practice'),
-        {'single': '单选题', 'multiple': '多选题', 'judge': '判断题'}.get(data.get('qtype', 'single'), '单选题'),
+        {'single': '单选题', 'multiple': '多选题'}.get(data.get('qtype', 'single'), '单选题'),
     ))
     conn.commit()
     last_id = cur.lastrowid
@@ -571,7 +405,7 @@ def create_question(data):
 
 
 def update_question(qid, data):
-    """更新题目（自动净化 stem/options/explanation）"""
+    """更新题目"""
     conn = get_db()
     cur = conn.cursor()
     fields = []
@@ -580,23 +414,10 @@ def update_question(qid, data):
                 'category_id', 'is_real_exam', 'exam_year', 'source', 'qtype_text', 'status']:
         if key in data:
             fields.append(f"{key} = ?")
-            # 净化 HTML 字段
-            if key == 'stem':
-                values.append(sanitize_html(data[key]))
-            elif key == 'explanation':
-                values.append(sanitize_html(data[key]))
-            elif key == 'options':
-                try:
-                    options_dict = json.loads(data[key]) if data[key] else {}
-                    options_dict = {k: sanitize_html(v) for k, v in options_dict.items()}
-                    values.append(json.dumps(options_dict, ensure_ascii=False))
-                except (json.JSONDecodeError, TypeError):
-                    values.append(data[key])
-            else:
-                values.append(data[key])
+            values.append(data[key])
     # 确保 qtype_text 与 qtype 一致
     if 'qtype' in data:
-        qtype_text = {'single': '单选题', 'multiple': '多选题', 'judge': '判断题'}.get(data['qtype'], '单选题')
+        qtype_text = {'single': '单选题', 'multiple': '多选题'}.get(data['qtype'], '单选题')
         if 'qtype_text' not in data or data['qtype_text'] != qtype_text:
             fields.append('qtype_text = ?')
             values.append(qtype_text)
@@ -855,13 +676,13 @@ def get_all_subjects_for_permission():
 
 # ==================== 答题历史 ====================
 
-def save_answer(user_id, question_id, user_answer, correct, subject_id=1, source='practice'):
+def save_answer(user_id, question_id, user_answer, correct, subject_id=1):
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO history (user_id, question_id, user_answer, correct, subject_id, source)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (user_id, question_id, user_answer, correct, subject_id, source))
+        INSERT INTO history (user_id, question_id, user_answer, correct, subject_id)
+        VALUES (?, ?, ?, ?, ?)
+    """, (user_id, question_id, user_answer, correct, subject_id))
     conn.commit()
     conn.close()
 
@@ -966,6 +787,7 @@ import random
 
 # FSRS 常量
 FSRS_DECAY = 0.9  # 遗忘衰减系数（保留兼容性）
+MASTERED_INTERVAL = 180  # 掌握阈值：间隔≥180天视为已掌握
 FSRS_GAIN_FACTOR = 2.5  # 增长系数（gain = qf × 2.5 / sqrt(log2(S+1))）
 def get_interval(stability, desired_retention=0.9):
     """由稳定性计算下次复习间隔（天）
@@ -1207,42 +1029,13 @@ def get_review_progress(user_id, subject_id=None, category_id=None):
         cur.execute("SELECT COUNT(*) as total FROM questions WHERE status = 1")
     total = cur.fetchone()[0]
     
-    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    # reviewed: 按 subject_id/category_id 过滤
-    if category_id:
-        cur.execute("""
-            SELECT COUNT(DISTINCT rs.question_id) FROM review_schedule rs
-            JOIN questions q ON q.id = rs.question_id
-            WHERE rs.user_id = ? AND q.category_id = ?
-        """, (user_id, category_id))
-    elif subject_id:
-        cur.execute("""
-            SELECT COUNT(DISTINCT rs.question_id) FROM review_schedule rs
-            JOIN questions q ON q.id = rs.question_id
-            WHERE rs.user_id = ? AND q.subject_id = ?
-        """, (user_id, subject_id))
-    else:
-        cur.execute("SELECT COUNT(*) as reviewed FROM review_schedule WHERE user_id = ?",
-                   (user_id,))
+    cur.execute("SELECT COUNT(*) as reviewed FROM review_schedule WHERE user_id = ?",
+               (user_id,))
     reviewed = cur.fetchone()[0]
     
-    # due: 按 subject_id/category_id 过滤
-    if category_id:
-        cur.execute("""
-            SELECT COUNT(DISTINCT rs.question_id) FROM review_schedule rs
-            JOIN questions q ON q.id = rs.question_id
-            WHERE rs.user_id = ? AND q.category_id = ? AND rs.next_review <= ?
-        """, (user_id, category_id, now))
-    elif subject_id:
-        cur.execute("""
-            SELECT COUNT(DISTINCT rs.question_id) FROM review_schedule rs
-            JOIN questions q ON q.id = rs.question_id
-            WHERE rs.user_id = ? AND q.subject_id = ? AND rs.next_review <= ?
-        """, (user_id, subject_id, now))
-    else:
-        cur.execute("SELECT COUNT(*) as due FROM review_schedule WHERE user_id = ? AND next_review <= ?",
-                   (user_id, now))
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cur.execute("SELECT COUNT(*) as due FROM review_schedule WHERE user_id = ? AND next_review <= ?",
+               (user_id, now))
     due = cur.fetchone()[0]
     
     conn.close()
@@ -1279,7 +1072,7 @@ def get_study_limits(user_id, subject_id):
         }
     return {
         'daily_new_limit': 10, 'daily_review_limit': 50, 'desired_retention': 0.9,
-        'max_interval': 30, 'learning_steps': LEARNING_STEPS,
+        'max_interval': 30,  # 间隔上限30天 'learning_steps': LEARNING_STEPS,
     }
 
 
@@ -1316,6 +1109,80 @@ def set_study_limits(user_id, subject_id, daily_new_limit=None, daily_review_lim
     }
 
 
+def get_daily_study_count(user_id, subject_id):
+    """获取用户今日已答题数（区分新题和复习）
+    
+    新题：答题时不在 review_schedule 中的题目
+    复习：答题时已在 review_schedule 中的题目
+    
+    返回: {new_count, review_count, date}
+    """
+    from datetime import datetime
+    today = datetime.now().strftime('%Y-%m-%d')
+    
+    conn = get_db()
+    cur = conn.cursor()
+    
+    # 今日新题数：答题时不在 review_schedule 中
+    # 用子查询近似：首次答题记录（该题第一条 history）且今日产生
+    cur.execute("""
+        SELECT COUNT(*) FROM (
+            SELECT h.question_id
+            FROM history h
+            WHERE h.user_id = ? AND h.subject_id = ?
+            AND DATE(h.timestamp) = ?
+            AND h.id = (
+                SELECT MIN(h2.id) FROM history h2
+                WHERE h2.user_id = h.user_id AND h2.question_id = h.question_id
+            )
+        )
+    """, (user_id, subject_id, today))
+    new_count = cur.fetchone()[0]
+    
+    # 今日复习数：今日答题总数 - 新题数
+    cur.execute("""
+        SELECT COUNT(*) FROM history
+        WHERE user_id = ? AND subject_id = ? AND DATE(timestamp) = ?
+    """, (user_id, subject_id, today))
+    total_count = cur.fetchone()[0]
+    review_count = total_count - new_count
+    
+    conn.close()
+    return {'new_count': new_count, 'review_count': review_count, 'total_count': total_count, 'date': today}
+
+
+def can_do_new_question(user_id, subject_id):
+    """检查是否还能做新题（未达上限）
+    
+    返回: {can_do: bool, current: int, limit: int}
+    """
+    limits = get_study_limits(user_id, subject_id)
+    count = get_daily_study_count(user_id, subject_id)
+    remaining = limits['daily_new_limit'] - count['new_count']
+    return {
+        'can_do': remaining > 0,
+        'current': count['new_count'],
+        'limit': limits['daily_new_limit'],
+        'remaining': max(0, remaining),
+    }
+
+
+def can_do_review(user_id, subject_id):
+    """检查是否还能复习（未达上限）
+    
+    返回: {can_do: bool, current: int, limit: int}
+    """
+    limits = get_study_limits(user_id, subject_id)
+    count = get_daily_study_count(user_id, subject_id)
+    remaining = limits['daily_review_limit'] - count['review_count']
+    return {
+        'can_do': remaining > 0,
+        'current': count['review_count'],
+        'limit': limits['daily_review_limit'],
+        'remaining': max(0, remaining),
+    }
+
+
 # ==================== 复习调度 ====================
 
 def _mastered_sql_condition():
@@ -1323,30 +1190,10 @@ def _mastered_sql_condition():
     return 'rs.stability >= 45 AND rs.repetitions >= 3'
 
 
-def _reinforce_sql_condition():
-    """返回 SQL 中的"强化"条件子句：答题次数 >= 9"""
-    return 'rs.repetitions >= 9'
-
-
-def is_question_reinforce(user_id, question_id):
-    """判断题目是否需要强化（答题次数 >= 9）"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT repetitions FROM review_schedule
-        WHERE user_id = ? AND question_id = ?
-    """, (user_id, question_id))
-    row = cur.fetchone()
-    conn.close()
-    if not row:
-        return False
-    return row[0] >= 9
-
-
 def is_question_mastered(user_id, question_id):
     """判断题目是否已掌握
     
-    标准: stability >= 45 AND repetitions >= 3
+    FSRS 标准: stability >= 180（间隔≥180天）AND repetitions >= 3
     """
     conn = get_db()
     cur = conn.cursor()
@@ -1361,38 +1208,6 @@ def is_question_mastered(user_id, question_id):
     r = dict(row)
     s = r.get('stability') or 0
     return r['repetitions'] >= 3 and s >= 45
-
-
-def is_question_in_reinforce(user_id, question_id):
-    """判断题目是否处于强化状态（card_state = 'reinforce'）"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT card_state FROM review_schedule
-        WHERE user_id = ? AND question_id = ?
-    """, (user_id, question_id))
-    row = cur.fetchone()
-    conn.close()
-    if not row:
-        return False
-    return row[0] == 'reinforce'
-
-
-def exit_reinforce_mode(user_id, question_id):
-    """退出强化状态：重置为复习，stability=45, repetitions 至少 3（满足已掌握条件）"""
-    from datetime import datetime, timedelta, date
-    conn = get_db()
-    cur = conn.cursor()
-    # 30天后复习（最长间隔），stability 设为 45（满足已掌握条件）
-    next_review = datetime.combine(date.today() + timedelta(days=30), datetime.min.time())
-    cur.execute("""
-        UPDATE review_schedule
-        SET card_state = 'review', next_review = ?,
-            stability = 45.0, repetitions = MAX(repetitions, 3)
-        WHERE user_id = ? AND question_id = ?
-    """, (next_review.strftime('%Y-%m-%d %H:%M:%S'), user_id, question_id))
-    conn.commit()
-    conn.close()
 
 
 def get_review_schedule(user_id, question_id):
@@ -1411,7 +1226,7 @@ def get_review_schedule(user_id, question_id):
 def predict_review_result(user_id, question_id, subject_id):
     """预测各评分（0~4）的调度结果，供前端展示
     
-    返回: {0: '退回学习（需答对2次）', 1: '1天后', 2: '明天复习', ...}
+    返回: {0: '重来，1分钟后', 1: '2天后', 2: '5天后', 3: '12天后', 4: '25天后'}
     逻辑与 update_review_schedule 一致，但不修改数据库。
     """
     from datetime import datetime, timedelta, date
@@ -1421,6 +1236,7 @@ def predict_review_result(user_id, question_id, subject_id):
     limits = get_study_limits(user_id, subject_id)
     dr = limits['desired_retention']
     learning_steps = limits['learning_steps']
+    max_interval = limits['max_interval']
     
     schedule = get_review_schedule(user_id, question_id)
     
@@ -1430,33 +1246,47 @@ def predict_review_result(user_id, question_id, subject_id):
             learning_step = schedule.get('learning_step') or 0
             stability = schedule.get('stability') or 1.0
             difficulty = schedule.get('difficulty') or 5.0
+            reps = schedule.get('repetitions') or 0
             
-            if card_state == 'learning':
-                # 学习阶段
+            if card_state in ('learning', 'relearning'):
+                # 学习/重学阶段
                 if q >= 2:
-                    # 答对，计数器减 1
-                    remaining = max(0, learning_step - 1)
-                    if remaining == 0:
-                        # 毕业，进入复习
-                        if q == 2:
-                            results[q] = '明天复习'
-                        elif q == 3:
-                            results[q] = '2天后'
+                    # 答对，进入下一步
+                    next_step = learning_step + 1
+                    if next_step >= len(learning_steps):
+                        # 学习完成，进入正式复习
+                        if card_state == 'relearning':
+                            new_s = stability * (1.0 + q * 0.3)
+                            new_d = difficulty
                         else:
-                            results[q] = '6天后'
+                            new_s, new_d = init_memory_state(q)
+                        interval = get_interval(new_s, dr)
+                        interval = apply_fuzz(max(1, round(interval)))
+                        interval = min(interval, max_interval)
+                        if interval == 0:
+                            results[q] = '继续学习'
+                        elif interval == 1:
+                            results[q] = '明天复习'
+                        else:
+                            results[q] = f'{interval}天后'
                     else:
-                        results[q] = f'还需答对{remaining}次'
+                        # 进入下一步（分钟级）
+                        mins = learning_steps[next_step]
+                        results[q] = f'{mins}分钟后'
                 else:
-                    # 答错，回队尾
-                    results[q] = '回队尾，重新练习'
+                    # 答错，重做当前步骤
+                    mins = learning_steps[learning_step]
+                    if card_state == 'relearning':
+                        results[q] = f'重来，{mins}分钟后'
+                    else:
+                        results[q] = f'{mins}分钟后'
             else:
                 # 正式复习阶段
-                if q == 0:
-                    results[q] = '退回学习（需答对2次）'
-                elif q == 1:
-                    results[q] = '退回学习（需答对1次）'
+                if q < 2:
+                    # 答错 → 固定间隔 = 1天
+                    results[q] = '1天后'
                 else:
-                    # 答对 → FSRS
+                    # 答对 → FSRS 正常调度
                     last_review_str = schedule.get('last_review')
                     if last_review_str:
                         last_review = datetime.strptime(last_review_str, '%Y-%m-%d %H:%M:%S')
@@ -1465,23 +1295,28 @@ def predict_review_result(user_id, question_id, subject_id):
                         delta_t = 1
                     
                     new_s, new_d, new_i, base_i = fsrs_schedule(q, stability, difficulty, delta_t, dr)
-                    new_i = min(int(base_i), 30)  # 间隔上限 30 天
-                    if new_i == 1:
+                    # predict 使用 base_i（无 fuzz），确保 q=3/4 区分度
+                    new_i = min(base_i, max_interval)
+                    if new_i == 0:
+                        results[q] = '继续学习'
+                    elif new_i == 1:
                         results[q] = '明天复习'
                     else:
                         results[q] = f'{new_i}天后'
         else:
             # 新题，无记录
-            if q == 0:
-                results[q] = '需答对2次进入复习'
-            elif q == 1:
-                results[q] = '需答对1次进入复习'
-            elif q == 2:
-                results[q] = '明天复习'
-            elif q == 3:
-                results[q] = '2天后'
+            if q >= 2:
+                # 答对，进入学习
+                if len(learning_steps) > 1:
+                    results[q] = f'{learning_steps[1]}分钟后'
+                else:
+                    new_s, new_d = init_memory_state(q)
+                    interval = get_interval(new_s, dr)
+                    interval = apply_fuzz(max(1, round(interval)))
+                    results[q] = f'{interval}天后'
             else:
-                results[q] = '6天后'
+                # 答错，重新学习
+                results[q] = f'重来，{learning_steps[0]}分钟后'
     
     return results
 
@@ -1505,7 +1340,7 @@ def update_review_schedule(user_id, question_id, subject_id, quality):
     # 获取复习记录
     cur.execute("""
         SELECT ease_factor, interval, repetitions, stability, difficulty, last_review,
-               card_state, learning_step, consecutive_easy
+               card_state, learning_step
         FROM review_schedule
         WHERE user_id = ? AND question_id = ?
     """, (user_id, question_id))
@@ -1516,82 +1351,84 @@ def update_review_schedule(user_id, question_id, subject_id, quality):
         existing = dict(existing_row)
         card_state = existing.get('card_state') or 'review'
         learning_step = existing.get('learning_step') or 0
-        consecutive_easy = existing.get('consecutive_easy') or 0
 
-        if card_state == 'learning':
-            # ── 学习阶段（learning_step = 还需答对次数）──
-            now = datetime.now()
-            new_stability = existing.get('stability') or 1.0
-            new_difficulty = existing.get('difficulty') or 5.0
-            new_ease = existing['ease_factor']
-            new_reps = existing['repetitions'] + 1
-
-            if quality >= 2:  # 答对，计数器减 1
-                learning_step = max(0, learning_step - 1)
-                if learning_step == 0:
-                    # 毕业，进入复习
-                    card_state = 'review'
-                    new_stability, new_difficulty = init_memory_state(quality)
-                    if quality == 2:
-                        new_interval = 1
-                        next_review = datetime.combine(
-                            date.today() + timedelta(days=1), datetime.min.time()
-                        )
-                    elif quality == 3:
-                        new_interval = 2
-                        next_review = datetime.combine(
-                            date.today() + timedelta(days=2), datetime.min.time()
-                        )
+        if card_state in ('learning', 'relearning'):
+            # ── 学习/重学阶段 ──
+            if quality >= 2:  # 答对，进入下一步
+                next_step = learning_step + 1
+                if next_step >= len(learning_steps):
+                    # 所有步骤通过
+                    if card_state == 'relearning':
+                        # 重学完成：保留30%稳定性基础上，基于评分小幅增长
+                        base_s = existing.get('stability') or 1.0
+                        new_stability = base_s * (1.0 + quality * 0.3)  # 根据评分增长
+                        new_difficulty = existing.get('difficulty') or 5.0
                     else:
-                        new_interval = 6
-                        next_review = datetime.combine(
-                            date.today() + timedelta(days=6), datetime.min.time()
-                        )
+                        # 新题学习完成：初始化
+                        new_stability, new_difficulty = init_memory_state(quality)
+                    new_interval = get_interval(new_stability, dr)
+                    new_interval = apply_fuzz(max(1, round(new_interval)))
+                    new_interval = min(new_interval, max_interval)  # 不超过最大间隔
+                    new_reps = existing['repetitions'] + 1
+                    new_ease = existing['ease_factor']
+                    card_state = 'review'
+                    learning_step = 0
+                    # 下次复习按 FSRS 间隔（天）
+                    now = datetime.now()
+                    base_review = datetime.combine(
+                        date.today() + timedelta(days=1), datetime.min.time()
+                    )
+                    if new_interval > 1:
+                        base_review += timedelta(days=new_interval - 1)
+                    next_review = _balance_review_date(
+                        user_id, subject_id, base_review, new_interval
+                    )
                 else:
-                    # 仍需学习，回队尾
-                    new_interval = 0
-                    next_review = now
+                    # 进入下一步学习（分钟级间隔）
+                    new_stability = existing.get('stability') or 1.0
+                    new_difficulty = existing.get('difficulty') or 5.0
+                    new_interval = 0  # 学习阶段用分钟，interval=0
+                    new_reps = existing['repetitions'] + 1
+                    new_ease = existing['ease_factor']
+                    # 保持当前状态（relearning 保持 relearning）
+                    learning_step = next_step
+                    # 下次复习在 N 分钟后
+                    now = datetime.now()
+                    next_review = now + timedelta(minutes=learning_steps[next_step])
             else:
-                # 答错，计数器不变，回队尾
+                # 答错，重做当前步骤
+                new_stability = existing.get('stability') or 1.0
+                new_difficulty = existing.get('difficulty') or 5.0
                 new_interval = 0
-                next_review = now
-
-            # 连续简单/秒答计数器
-            if quality >= 3:
-                consecutive_easy += 1
-            else:
-                consecutive_easy = 0
+                new_reps = existing['repetitions'] + 1
+                new_ease = existing['ease_factor']
+                # 保持当前状态
+                # 重做当前步骤（保持 learning_step 不变）
+                now = datetime.now()
+                next_review = now + timedelta(minutes=learning_steps[learning_step])
         else:
             # ── 正式复习阶段 ──
             stability = existing.get('stability') or 1.0
             difficulty = existing.get('difficulty') or 5.0
             reps = existing['repetitions']
 
-            # 强化触发条件：复习超过5次且评分非简单/秒答（quality < 3）
-            if quality < 3 and reps > 5:
-                # 直接进入强化状态
+            if quality < 2:
+                # 答错 → 固定间隔 = 1天（下次再复习）
+                # 稳定性降至 30%，作为后续增长的基数
                 new_stability = stability * RELEARNING_STABILITY_KEEP
                 _, new_difficulty = init_memory_state(quality)
-                new_interval = 30
+                new_interval = 1  # 固定1天间隔
                 new_reps = reps + 1
                 new_ease = existing['ease_factor']
-                card_state = 'reinforce'
+                card_state = 'review'
                 learning_step = 0
                 now = datetime.now()
-                next_review = datetime.combine(date.today() + timedelta(days=30), datetime.min.time())
-            elif quality in (0, 1):
-                # 忘了/模糊 → 退回学习
-                new_stability = stability * RELEARNING_STABILITY_KEEP
-                _, new_difficulty = init_memory_state(quality)
-                new_interval = 0
-                new_reps = reps + 1
-                new_ease = existing['ease_factor']
-                card_state = 'learning'
-                learning_step = 2 if quality == 0 else 1
-                now = datetime.now()
-                next_review = now  # 回队尾
+                next_review = datetime.combine(
+                    date.today() + timedelta(days=1), datetime.min.time()
+                )
             else:
-                # 答对（一般/简单/秒答）→ 正常 FSRS 调度
+                # 答对 → 正常 FSRS 调度
+                # 计算 delta_t：跨零点天数（距上次复习跨越了几个午夜）
                 last_review_str = existing.get('last_review')
                 if last_review_str:
                     last_review = datetime.strptime(last_review_str, '%Y-%m-%d %H:%M:%S')
@@ -1602,16 +1439,16 @@ def update_review_schedule(user_id, question_id, subject_id, quality):
                 new_stability, new_difficulty, new_interval, base_interval = fsrs_schedule(
                     quality, stability, difficulty, delta_t, dr
                 )
-                new_interval = min(new_interval, 30)
                 new_reps = reps + 1
                 new_ease = existing['ease_factor']
 
+                # interval < 1 → 进入 learning 状态，本次会话重复
                 if new_interval < 1:
                     card_state = 'learning'
-                    learning_step = 2
+                    learning_step = 0
                     new_interval = 0
                     now = datetime.now()
-                    next_review = now
+                    next_review = now + timedelta(minutes=learning_steps[0])
                 else:
                     card_state = 'review'
                     learning_step = 0
@@ -1627,87 +1464,63 @@ def update_review_schedule(user_id, question_id, subject_id, quality):
                         next_review = _balance_review_date(
                             user_id, subject_id, base_review, new_interval
                         )
-
-            # 连续简单/秒答计数器
-            if quality >= 3:
-                consecutive_easy += 1
-            else:
-                consecutive_easy = 0
     else:
-        # 新题首次答题：按评分分流
-        now = datetime.now()
-        new_reps = 1
-        new_ease = 2.5
-
-        if quality == 0:  # 忘了 → 学习，需答对2次
-            new_stability, new_difficulty = init_memory_state(quality)
-            card_state = 'learning'
-            learning_step = 2
+        # 新题首次进入学习阶段
+        new_stability, new_difficulty = init_memory_state(quality)
+        if quality >= 2:  # 答对，进入下一步学习
             new_interval = 0
-            next_review = now  # 回队尾
-        elif quality == 1:  # 模糊 → 学习，需答对1次
-            new_stability, new_difficulty = init_memory_state(quality)
+            new_reps = 1
+            new_ease = 2.5
             card_state = 'learning'
-            learning_step = 1
+            learning_step = 0
+            now = datetime.now()
+            if len(learning_steps) > 1:
+                # 有多步学习，进入第2步
+                next_review = now + timedelta(minutes=learning_steps[1])
+                learning_step = 1
+            else:
+                # 只有1步学习，直接进入复习
+                new_stability, new_difficulty = init_memory_state(quality)
+                new_interval = get_interval(new_stability, dr)
+                new_interval = apply_fuzz(max(1, round(new_interval)))
+                new_interval = min(new_interval, max_interval)  # 不超过最大间隔
+                card_state = 'review'
+                learning_step = 0
+                next_review = datetime.combine(
+                    date.today() + timedelta(days=1), datetime.min.time()
+                )
+                if new_interval > 1:
+                    next_review += timedelta(days=new_interval - 1)
+        else:
+            # 答错，重做第1步
             new_interval = 0
-            next_review = now  # 回队尾
-        elif quality == 2:  # 一般 → 复习，1天后
-            new_stability, new_difficulty = init_memory_state(quality)
-            card_state = 'review'
+            new_reps = 1
+            new_ease = 2.5
+            card_state = 'learning'
             learning_step = 0
-            new_interval = 1
-            next_review = datetime.combine(
-                date.today() + timedelta(days=1), datetime.min.time()
-            )
-        elif quality == 3:  # 简单 → 复习，2天后
-            new_stability, new_difficulty = init_memory_state(quality)
-            card_state = 'review'
-            learning_step = 0
-            new_interval = 2
-            next_review = datetime.combine(
-                date.today() + timedelta(days=2), datetime.min.time()
-            )
-        else:  # quality == 4 秒答 → 复习，6天后
-            new_stability, new_difficulty = init_memory_state(quality)
-            card_state = 'review'
-            learning_step = 0
-            new_interval = 6
-            next_review = datetime.combine(
-                date.today() + timedelta(days=6), datetime.min.time()
-            )
-
-        # 连续简单/秒答计数器
-        consecutive_easy = 1 if quality >= 3 else 0
-
-    # 连续 3 次简单/秒答 → 强制已掌握（任何状态都覆盖）
-    if consecutive_easy >= 3:
-        card_state = 'review'
-        learning_step = 0
-        new_stability = 45.0
-        new_reps = max(new_reps, 3)
-        new_interval = 30
-        next_review = datetime.combine(date.today() + timedelta(days=30), datetime.min.time())
-
+            now = datetime.now()
+            next_review = now + timedelta(minutes=learning_steps[0])
+    
     if existing_row:
         cur.execute("""
             UPDATE review_schedule
             SET ease_factor = ?, interval = ?, repetitions = ?,
                 next_review = ?, last_review = ?, last_quality = ?,
                 stability = ?, difficulty = ?,
-                card_state = ?, learning_step = ?, consecutive_easy = ?
+                card_state = ?, learning_step = ?
             WHERE user_id = ? AND question_id = ?
         """, (new_ease, new_interval, new_reps,
               next_review.strftime('%Y-%m-%d %H:%M:%S'),
               now.strftime('%Y-%m-%d %H:%M:%S'),
               quality, round(new_stability, 2), round(new_difficulty, 2),
-              card_state, learning_step, consecutive_easy,
+              card_state, learning_step,
               user_id, question_id))
     else:
         cur.execute("""
-            INSERT INTO review_schedule (user_id, question_id, subject_id, ease_factor, interval, repetitions, consecutive_easy, next_review, last_review, last_quality, stability, difficulty, card_state, learning_step)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO review_schedule (user_id, question_id, subject_id, ease_factor, interval, repetitions, next_review, last_review, last_quality, stability, difficulty, card_state, learning_step)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (user_id, question_id, subject_id,
-              new_ease, new_interval, new_reps, consecutive_easy,
+              new_ease, new_interval, new_reps,
               next_review.strftime('%Y-%m-%d %H:%M:%S'),
               now.strftime('%Y-%m-%d %H:%M:%S'),
               quality, round(new_stability, 2), round(new_difficulty, 2),
@@ -1736,154 +1549,6 @@ def delete_review_schedule(user_id, question_id):
     conn.commit()
     conn.close()
 
-
-def reset_question_schedule(user_id, question_id):
-    """重置题目为新题：删除复习计划 + 答题历史"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        'DELETE FROM review_schedule WHERE user_id = ? AND question_id = ?',
-        (user_id, question_id)
-    )
-    cur.execute(
-        'DELETE FROM history WHERE user_id = ? AND question_id = ?',
-        (user_id, question_id)
-    )
-    conn.commit()
-    conn.close()
-
-
-def skip_review_interval(user_id, question_id):
-    """跳过复习间隔：将题目设为立即复习状态，保留 FSRS 参数和历史记录
-    
-    将 next_review 设为当前时间，使题目立即变为"待复习"。
-    """
-    from datetime import datetime
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE review_schedule
-        SET next_review = ?
-        WHERE user_id = ? AND question_id = ?
-    """, (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id, question_id))
-    conn.commit()
-    conn.close()
-
-
-# ==================== 授权管理 ====================
-
-def grant_user_license(user_id, subject_id, days=365):
-    """授予用户科目授权，有效期 N 天"""
-    from datetime import datetime, timedelta
-    conn = get_db()
-    cur = conn.cursor()
-    expires_at = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
-    cur.execute("""
-        INSERT INTO user_licenses (user_id, subject_id, expires_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(user_id, subject_id) DO UPDATE SET expires_at = ?
-    """, (user_id, subject_id, expires_at, expires_at))
-    conn.commit()
-    conn.close()
-
-
-def revoke_user_license(user_id, subject_id):
-    """吊销用户科目授权"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM user_licenses WHERE user_id = ? AND subject_id = ?", (user_id, subject_id))
-    conn.commit()
-    conn.close()
-
-
-def check_user_license(user_id, subject_id):
-    """检查用户是否有有效授权
-    
-    返回: {has_license: bool, expires_at: str|None, days_left: int|None, is_expired: bool}
-    """
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT expires_at FROM user_licenses
-        WHERE user_id = ? AND subject_id = ?
-    """, (user_id, subject_id))
-    row = cur.fetchone()
-    conn.close()
-    
-    if not row:
-        return {'has_license': False, 'expires_at': None, 'days_left': None, 'is_expired': True}
-    
-    from datetime import datetime
-    expires_at = datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S')
-    days_left = (expires_at - datetime.now()).days
-    is_expired = days_left <= 0
-    
-    return {
-        'has_license': True,
-        'expires_at': row[0],
-        'days_left': days_left,
-        'is_expired': is_expired
-    }
-
-
-def get_user_licenses(user_id):
-    """获取用户所有授权"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT ul.id, ul.subject_id, s.name, ul.expires_at
-        FROM user_licenses ul
-        JOIN subjects s ON s.id = ul.subject_id
-        WHERE ul.user_id = ?
-        ORDER BY ul.expires_at
-    """, (user_id,))
-    licenses = []
-    for row in cur.fetchall():
-        from datetime import datetime
-        expires_at = datetime.strptime(row[3], '%Y-%m-%d %H:%M:%S')
-        days_left = (expires_at - datetime.now()).days
-        licenses.append({
-            'id': row[0],
-            'subject_id': row[1],
-            'subject_name': row[2],
-            'expires_at': row[3],
-            'days_left': days_left,
-            'is_expired': days_left <= 0
-        })
-    conn.close()
-    return licenses
-
-
-def get_all_licenses():
-    """获取所有用户授权（管理后台用）"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT ul.id, u.id as user_id, u.username, ul.subject_id, s.name as subject_name,
-               ul.expires_at, ul.created_at
-        FROM user_licenses ul
-        JOIN users u ON u.id = ul.user_id
-        JOIN subjects s ON s.id = ul.subject_id
-        ORDER BY ul.expires_at
-    """)
-    licenses = []
-    for row in cur.fetchall():
-        from datetime import datetime
-        expires_at = datetime.strptime(row[5], '%Y-%m-%d %H:%M:%S')
-        days_left = (expires_at - datetime.now()).days
-        licenses.append({
-            'id': row[0],
-            'user_id': row[1],
-            'username': row[2],
-            'subject_id': row[3],
-            'subject_name': row[4],
-            'expires_at': row[5],
-            'created_at': row[6],
-            'days_left': days_left,
-            'is_expired': days_left <= 0
-        })
-    conn.close()
-    return licenses
 
 def predict_review_load(user_id, subject_id, days=30):
     """预测未来 N 天每日复习量
@@ -2067,8 +1732,6 @@ def get_due_today(user_id, category_id):
         FROM questions q
         JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
         WHERE q.category_id = ? AND q.status = 1 AND rs.next_review <= ?
-              AND rs.card_state != 'reinforce'
-              AND NOT (rs.stability >= 45 AND rs.repetitions >= 3)
         ORDER BY rs.next_review ASC
     """, (user_id, category_id, now_str))
     due = [dict(r) for r in cur.fetchall()]
@@ -2202,8 +1865,8 @@ def get_study_progress(user_id, category_id):
 
 def get_question_attempt_stats(user_id, category_id):
     """获取分类下每道题的做题次数统计"""
-    from datetime import datetime as dt
-    now = dt.now()
+    from datetime import datetime
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
@@ -2221,7 +1884,7 @@ def get_question_attempt_stats(user_id, category_id):
             rs.next_review,
             rs.last_quality
         FROM questions q
-        LEFT JOIN history h ON h.question_id = q.id AND h.user_id = ? AND (h.source IS NULL OR h.source = 'practice')
+        LEFT JOIN history h ON h.question_id = q.id AND h.user_id = ?
         LEFT JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = ?
         WHERE q.category_id = ? AND q.status = 1
         GROUP BY q.id
@@ -2234,7 +1897,9 @@ def get_question_attempt_stats(user_id, category_id):
         row['inferred_quality'] = infer_quality(row) if row['repetitions'] is not None else None
         # 下次复习时间描述（增强：显示小时级倒计时）
         if row['next_review']:
+            from datetime import datetime as dt
             next_rev = dt.strptime(row['next_review'], '%Y-%m-%d %H:%M:%S')
+            now = dt.now()
             diff_seconds = (next_rev - now).total_seconds()
             diff_days = (next_rev - now).days
             if diff_seconds < 0:
@@ -2288,21 +1953,21 @@ def infer_quality(record):
 # ==================== 统计模块 ====================
 
 def get_stats_summary(user_id, subject_id):
-    """获取学习统计概览，仅统计练习/复习，排除考试"""
+    """获取学习统计概览"""
     conn = get_db()
     cur = conn.cursor()
     now = datetime.now()
     today_str = now.strftime('%Y-%m-%d')
     seven_ago = (now - timedelta(days=7)).strftime('%Y-%m-%d')
     
-    # 总复习数（来自 history，排除考试）
-    cur.execute("SELECT COUNT(*) FROM history WHERE user_id = ? AND subject_id = ? AND (source IS NULL OR source = 'practice')", (user_id, subject_id))
+    # 总复习数（来自 history）
+    cur.execute("SELECT COUNT(*) FROM history WHERE user_id = ? AND subject_id = ?", (user_id, subject_id))
     total_reviewed = cur.fetchone()[0]
     
     # 今日复习数
     cur.execute("""
         SELECT COUNT(*) FROM history WHERE user_id = ? AND subject_id = ?
-        AND DATE(timestamp) = ? AND (source IS NULL OR source = 'practice')
+        AND DATE(timestamp) = ?
     """, (user_id, subject_id, today_str))
     today_reviewed = cur.fetchone()[0]
     
@@ -2314,7 +1979,7 @@ def get_stats_summary(user_id, subject_id):
     # 近7天正确率
     cur.execute("""
         SELECT AVG(CASE WHEN correct = 1 THEN 1.0 ELSE 0.0 END) * 100
-        FROM history WHERE user_id = ? AND subject_id = ? AND DATE(timestamp) >= ? AND (source IS NULL OR source = 'practice')
+        FROM history WHERE user_id = ? AND subject_id = ? AND DATE(timestamp) >= ?
     """, (user_id, subject_id, seven_ago))
     acc_7d = cur.fetchone()[0]
     accuracy_7d = round(acc_7d or 0, 1)
@@ -2322,7 +1987,7 @@ def get_stats_summary(user_id, subject_id):
     # 连续学习天数
     cur.execute("""
         SELECT DISTINCT DATE(timestamp) as study_date
-        FROM history WHERE user_id = ? AND subject_id = ? AND (source IS NULL OR source = 'practice')
+        FROM history WHERE user_id = ? AND subject_id = ?
         ORDER BY study_date DESC
     """, (user_id, subject_id))
     dates = [row[0] for row in cur.fetchall()]
@@ -2352,64 +2017,26 @@ def get_stats_summary(user_id, subject_id):
 
 
 def get_daily_trend(user_id, subject_id, days=30):
-    """获取每日复习趋势（含新题数），仅统计练习/复习，排除考试"""
+    """获取每日复习趋势"""
     conn = get_db()
     cur = conn.cursor()
     since = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     
-    # 每日总答题 + 新题数（该用户该科目第一次做此题，仅限练习/复习）
     cur.execute("""
-        SELECT DATE(h.timestamp) as date,
+        SELECT DATE(timestamp) as date,
                COUNT(*) as reviewed,
-               ROUND(AVG(CASE WHEN h.correct = 1 THEN 100.0 ELSE 0.0 END), 1) as accuracy,
-               SUM(CASE WHEN h.id = (
-                   SELECT MIN(h2.id) FROM history h2
-                   WHERE h2.user_id = ? AND h2.subject_id = ? AND h2.question_id = h.question_id
-                     AND (h2.source IS NULL OR h2.source = 'practice')
-               ) THEN 1 ELSE 0 END) as new_questions
-        FROM history h
-        WHERE h.user_id = ? AND h.subject_id = ? AND DATE(h.timestamp) >= ?
-          AND (h.source IS NULL OR h.source = 'practice')
-        GROUP BY DATE(h.timestamp) ORDER BY date
-    """, (user_id, subject_id, user_id, subject_id, since))
-    
-    result = [{
-        'date': r[0],
-        'reviewed': r[1],
-        'accuracy': float(r[2]),
-        'new_questions': r[3] or 0,
-    } for r in cur.fetchall()]
-    conn.close()
-    return result
-
-
-def get_exam_daily_trend(user_id, subject_id, days=30):
-    """获取每日考试趋势，仅统计考试数据"""
-    conn = get_db()
-    cur = conn.cursor()
-    since = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-    
-    cur.execute("""
-        SELECT DATE(h.timestamp) as date,
-               COUNT(*) as attempted,
-               ROUND(AVG(CASE WHEN h.correct = 1 THEN 100.0 ELSE 0.0 END), 1) as accuracy
-        FROM history h
-        WHERE h.user_id = ? AND h.subject_id = ? AND DATE(h.timestamp) >= ?
-          AND h.source = 'exam'
-        GROUP BY DATE(h.timestamp) ORDER BY date
+               ROUND(AVG(CASE WHEN correct = 1 THEN 100.0 ELSE 0.0 END), 1) as accuracy
+        FROM history WHERE user_id = ? AND subject_id = ? AND DATE(timestamp) >= ?
+        GROUP BY DATE(timestamp) ORDER BY date
     """, (user_id, subject_id, since))
     
-    result = [{
-        'date': r[0],
-        'attempted': r[1],
-        'accuracy': float(r[2]),
-    } for r in cur.fetchall()]
+    result = [{'date': r[0], 'reviewed': r[1], 'accuracy': float(r[2])} for r in cur.fetchall()]
     conn.close()
     return result
 
 
 def get_heatmap_data(user_id, subject_id, days=90):
-    """获取热力图数据（近 N 天），仅统计练习/复习"""
+    """获取热力图数据（近 N 天）"""
     conn = get_db()
     cur = conn.cursor()
     since = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
@@ -2417,208 +2044,36 @@ def get_heatmap_data(user_id, subject_id, days=90):
     cur.execute("""
         SELECT DATE(timestamp) as date, COUNT(*) as count
         FROM history WHERE user_id = ? AND subject_id = ? AND DATE(timestamp) >= ?
-          AND (source IS NULL OR source = 'practice')
         GROUP BY DATE(timestamp) ORDER BY date
     """, (user_id, subject_id, since))
     
     result = {r[0]: r[1] for r in cur.fetchall()}
-    conn.close()
-    return result
-
-
-def get_year_heatmap(user_id, subject_id, year):
-    """获取指定年份热力图数据（全年 365/366 天）"""
-    conn = get_db()
-    cur = conn.cursor()
-    since = f'{year}-01-01'
-    until = f'{year}-12-31'
-    
-    cur.execute("""
-        SELECT DATE(timestamp) as date, COUNT(*) as count
-        FROM history WHERE user_id = ? AND subject_id = ?
-        AND DATE(timestamp) >= ? AND DATE(timestamp) <= ?
-        GROUP BY DATE(timestamp) ORDER BY date
-    """, (user_id, subject_id, since, until))
-    
-    result = {r[0]: r[1] for r in cur.fetchall()}
-    conn.close()
-    return result
-
-
-def get_calendar_stats(user_id, subject_id, year):
-    """获取日历统计摘要：连续打卡、总打卡天数、总答题数、月度出勤率"""
-    from datetime import date
-    conn = get_db()
-    cur = conn.cursor()
-    
-    # 该科目所有学习日期
-    since = f'{year}-01-01'
-    until = f'{year}-12-31'
-    cur.execute("""
-        SELECT DISTINCT DATE(timestamp) as study_date
-        FROM history WHERE user_id = ? AND subject_id = ?
-        AND DATE(timestamp) >= ? AND DATE(timestamp) <= ?
-        ORDER BY study_date DESC
-    """, (user_id, subject_id, since, until))
-    all_dates = [row[0] for row in cur.fetchall()]
-    
-    # 总打卡天数
-    total_checkin = len(all_dates)
-    
-    # 连续打卡天数（从今天往前数）
-    streak = 0
-    expected = date.today()
-    for d in all_dates:
-        if d == expected.strftime('%Y-%m-%d'):
-            streak += 1
-            expected = expected - timedelta(days=1)
-        elif streak > 0:
-            break
-    
-    # 总答题数
-    cur.execute("""
-        SELECT COUNT(*) FROM history WHERE user_id = ? AND subject_id = ?
-        AND DATE(timestamp) >= ? AND DATE(timestamp) <= ?
-    """, (user_id, subject_id, since, until))
-    total_questions = cur.fetchone()[0]
-    
-    # 月度出勤率
-    month_attendance = {}
-    for m in range(1, 13):
-        m_start = date(year, m, 1)
-        if m == 12:
-            m_end = date(year, 12, 31)
-        else:
-            m_end = date(year, m + 1, 1) - timedelta(days=1)
-        # 该月实际过去的天数
-        today = date.today()
-        if today < m_start:
-            total_days = 0
-            active_days = 0
-        elif today < m_end:
-            total_days = (today - m_start).days + 1
-            active_days = sum(1 for d in all_dates if m_start.strftime('%Y-%m-%d') <= d <= today.strftime('%Y-%m-%d'))
-        else:
-            total_days = (m_end - m_start).days + 1
-            active_days = sum(1 for d in all_dates if m_start.strftime('%Y-%m-%d') <= d <= m_end.strftime('%Y-%m-%d'))
-        month_attendance[m] = {
-            'total': total_days,
-            'active': active_days,
-            'rate': round(active_days / total_days * 100, 0) if total_days > 0 else 0
-        }
-    
-    conn.close()
-    return {
-        'streak_days': streak,
-        'total_checkin': total_checkin,
-        'total_questions': total_questions,
-        'month_attendance': month_attendance,
-    }
-
-
-def get_daily_learning_time(user_id, subject_id, days=30):
-    """获取每日学习时长（按会话计算，间隔>30分钟视为新会话）"""
-    conn = get_db()
-    cur = conn.cursor()
-    since = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-
-    cur.execute("""
-        SELECT DATE(timestamp) as date, timestamp
-        FROM history
-        WHERE user_id = ? AND subject_id = ? AND DATE(timestamp) >= ? AND (source IS NULL OR source = 'practice')
-        ORDER BY DATE(timestamp), timestamp
-    """, (user_id, subject_id, since))
-
-    # 按日期分组
-    daily = {}  # date -> [datetime1, datetime2, ...]
-    for row in cur.fetchall():
-        d = row[0]
-        if d not in daily:
-            daily[d] = []
-        daily[d].append(datetime.strptime(row[1], '%Y-%m-%d %H:%M:%S'))
-    conn.close()
-
-    SESSION_GAP = timedelta(minutes=30)
-    TAIL_MINUTES = 3
-
-    result = {}
-    for d in sorted(daily.keys()):
-        times = sorted(daily[d])
-        total_minutes = 0
-        session_start = times[0]
-
-        for i in range(1, len(times)):
-            if times[i] - times[i - 1] > SESSION_GAP:
-                # 结束上一个会话
-                span = (times[i - 1] - session_start).total_seconds() / 60 + TAIL_MINUTES
-                total_minutes += max(span, 1)
-                session_start = times[i]
-
-        # 最后一个会话
-        span = (times[-1] - session_start).total_seconds() / 60 + TAIL_MINUTES
-        total_minutes += max(span, 1)
-        result[d] = round(total_minutes, 1)
-
-    return result
-
-
-def get_hourly_distribution(user_id, subject_id, days=30):
-    """获取 24 小时答题分布"""
-    conn = get_db()
-    cur = conn.cursor()
-    since = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-
-    cur.execute("""
-        SELECT CAST(strftime('%H', timestamp) AS INTEGER) as hour, COUNT(*) as cnt
-        FROM history
-        WHERE user_id = ? AND subject_id = ? AND DATE(timestamp) >= ? AND (source IS NULL OR source = 'practice')
-        GROUP BY hour ORDER BY hour
-    """, (user_id, subject_id, since))
-
-    result = {h: c for h, c in cur.fetchall()}
     conn.close()
     return result
 
 
 def get_category_mastery(user_id, subject_id):
-    """获取分类掌握度，包含所有分类（含未学的），排除考试数据。
-    使用子查询避免 history 多行与 review_schedule 的交叉乘积。"""
+    """获取分类掌握度"""
     conn = get_db()
     cur = conn.cursor()
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    mastered_cond = _mastered_sql_condition()
     
-    cur.execute(f"""
-        SELECT c.id as category_id, c.name as category_name,
-               (SELECT COUNT(*) FROM questions q WHERE q.category_id = c.id AND q.status = 1 AND q.subject_id = ?) as total,
-               (SELECT COUNT(DISTINCT h.question_id) FROM history h JOIN questions q ON q.id = h.question_id WHERE h.question_id IN (SELECT id FROM questions WHERE category_id = c.id AND status = 1 AND subject_id = ?) AND h.user_id = ? AND (h.source IS NULL OR h.source = 'practice')) as reviewed,
-               (SELECT ROUND(AVG(CASE WHEN h.correct = 1 THEN 100.0 ELSE 0.0 END), 1) FROM history h JOIN questions q ON q.id = h.question_id WHERE h.question_id IN (SELECT id FROM questions WHERE category_id = c.id AND status = 1 AND subject_id = ?) AND h.user_id = ? AND (h.source IS NULL OR h.source = 'practice')) as accuracy,
-               (SELECT COUNT(*) FROM review_schedule rs JOIN questions q ON q.id = rs.question_id WHERE rs.question_id IN (SELECT id FROM questions WHERE category_id = c.id AND status = 1 AND subject_id = ?) AND rs.user_id = ? AND {mastered_cond}) as mastered,
-               (SELECT COUNT(*) FROM review_schedule rs JOIN questions q ON q.id = rs.question_id WHERE rs.question_id IN (SELECT id FROM questions WHERE category_id = c.id AND status = 1 AND subject_id = ?) AND rs.user_id = ? AND rs.next_review <= ? AND rs.card_state != 'reinforce') as due
-        FROM categories c
-        WHERE c.subject_id = ? AND c.name IS NOT NULL AND c.level = 2
-        ORDER BY c.id
-    """, (subject_id, subject_id, user_id, subject_id, user_id, subject_id, user_id, subject_id, user_id, now, subject_id))
+    cur.execute("""
+        SELECT c.name as category_name,
+               COUNT(DISTINCT h.question_id) as reviewed,
+               ROUND(AVG(CASE WHEN h.correct = 1 THEN 100.0 ELSE 0.0 END), 1) as accuracy,
+               SUM(CASE WHEN rs.next_review <= ? THEN 1 ELSE 0 END) as due
+        FROM history h
+        JOIN questions q ON q.id = h.question_id
+        JOIN categories c ON c.id = q.category_id
+        LEFT JOIN review_schedule rs ON rs.question_id = q.id AND rs.user_id = h.user_id
+        WHERE h.user_id = ? AND h.subject_id = ?
+        GROUP BY c.id, c.name
+        HAVING reviewed >= 1
+        ORDER BY accuracy ASC
+    """, (now, user_id, subject_id))
     
-    result = []
-    for r in cur.fetchall():
-        total = r[2] or 0
-        reviewed = r[3] or 0
-        accuracy = r[4]
-        mastered = r[5] or 0
-        due = r[6] or 0
-        if total == 0:
-            continue
-        result.append({
-            'name': r[1],
-            'total': total,
-            'reviewed': reviewed,
-            'unstudied': total - reviewed,
-            'accuracy': float(accuracy) if accuracy is not None else None,
-            'mastered': mastered,
-            'due': due,
-            'mastered_rate': round(mastered / total * 100, 1) if total > 0 else 0,
-        })
+    result = [{'name': r[0], 'reviewed': r[1], 'accuracy': float(r[2] or 0), 'due': r[3] or 0} for r in cur.fetchall()]
     conn.close()
     return result
 
@@ -2637,7 +2092,7 @@ def get_retention_curve(user_id, subject_id):
             SUM(CASE WHEN rs.ease_factor >= 1.5 THEN 1 ELSE 0 END) as retained
         FROM review_schedule rs
         JOIN questions q ON q.id = rs.question_id
-        JOIN history h ON h.question_id = rs.question_id AND h.user_id = rs.user_id AND (h.source IS NULL OR h.source = 'practice')
+        JOIN history h ON h.question_id = rs.question_id AND h.user_id = rs.user_id
         WHERE rs.user_id = ? AND q.subject_id = ? AND rs.last_review IS NOT NULL
         GROUP BY days_since
         HAVING total >= 1
@@ -2853,7 +2308,7 @@ def get_unreviewed_count(user_id, category_id):
 
 
 def get_mastered_questions(user_id, category_id):
-    """获取已掌握的题目（标准: stability >= 45 AND repetitions >= 3）"""
+    """获取已掌握的题目（FSRS 标准: stability >= 180 AND repetitions >= 3）"""
     conn = get_db()
     cur = conn.cursor()
     cur.execute(f"""
@@ -2900,7 +2355,7 @@ def get_subject_category_stats(user_id, subject_id):
     conn = get_db()
     cur = conn.cursor()
 
-    stats = {lid: {"total": 0, "studied": 0, "unstudied": 0, "due": 0, "mastered": 0} for lid in leaf_ids}
+    stats = {lid: {"total": 0, "studied": 0, "due": 0, "mastered": 0} for lid in leaf_ids}
 
     # 各分类总题量
     cur.execute(f"""
@@ -2922,10 +2377,6 @@ def get_subject_category_stats(user_id, subject_id):
     """, leaf_ids + [user_id])
     for row in cur.fetchall():
         stats[row["category_id"]]["studied"] = row["cnt"]
-
-    # 各分类未学习题数 = 总题量 - 已学
-    for lid in leaf_ids:
-        stats[lid]["unstudied"] = max(0, stats[lid]["total"] - stats[lid]["studied"])
 
     # 各分类待复习题数
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -2958,10 +2409,10 @@ def get_subject_category_stats(user_id, subject_id):
     def aggregate(node):
         children = node.get("children", [])
         if not children:
-            s = stats.get(node["id"], {"total": 0, "studied": 0, "unstudied": 0, "due": 0, "mastered": 0})
+            s = stats.get(node["id"], {"total": 0, "studied": 0, "due": 0, "mastered": 0})
             node["_stats"] = s
             return s
-        total = {"total": 0, "studied": 0, "unstudied": 0, "due": 0, "mastered": 0}
+        total = {"total": 0, "studied": 0, "due": 0, "mastered": 0}
         for child in children:
             child_stats = aggregate(child)
             for k in total:
@@ -2969,732 +2420,10 @@ def get_subject_category_stats(user_id, subject_id):
         node["_stats"] = total
         return total
 
-    subject_total = {"total": 0, "studied": 0, "unstudied": 0, "due": 0, "mastered": 0}
+    subject_total = {"total": 0, "studied": 0, "due": 0, "mastered": 0}
     for root in tree:
         root_stats = aggregate(root)
         for k in subject_total:
             subject_total[k] += root_stats[k]
 
     return {"tree": tree, "subject_total": subject_total}
-
-
-# ==================== 导入确认库 (Staging) ====================
-
-def get_staging_subject_counts():
-    """按科目统计 staging 中的待确认题目数"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT s.id, s.name, COUNT(st.id) as count
-        FROM subjects s
-        LEFT JOIN import_staging st ON st.subject_id = s.id
-        WHERE s.status = 1
-        GROUP BY s.id
-        HAVING count > 0
-        ORDER BY s.id
-    """)
-    results = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return results
-
-
-def get_staging_by_subject(subject_id, page=1, page_size=20, search=""):
-    """获取某科目 staging 中的题目（分页）"""
-    conn = get_db()
-    cur = conn.cursor()
-    
-    where = "subject_id = ?"
-    params = [subject_id]
-    if search:
-        where += " AND (stem LIKE ? OR question_id LIKE ?)"
-        params.extend([f"%{search}%", f"%{search}%"])
-    
-    cur.execute(f"SELECT COUNT(*) FROM import_staging WHERE {where}", params)
-    total = cur.fetchone()[0]
-    
-    cur.execute(f"""
-        SELECT * FROM import_staging 
-        WHERE {where}
-        ORDER BY id ASC
-        LIMIT ? OFFSET ?
-    """, params + [page_size, (page - 1) * page_size])
-    results = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return results, total
-
-
-def create_staging_record(data):
-    """写入 staging 单条记录"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO import_staging 
-        (question_id, subject_id, category_id, category_name, stem, 
-         option_a, option_b, option_c, option_d, option_e, option_f,
-         correct_answer, explanation)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        data.get('question_id'),
-        data['subject_id'],
-        data.get('category_id'),
-        data.get('category_name'),
-        data['stem'],
-        data.get('option_a'),
-        data.get('option_b'),
-        data.get('option_c'),
-        data.get('option_d'),
-        data.get('option_e'),
-        data.get('option_f'),
-        data.get('correct_answer'),
-        data.get('explanation'),
-    ))
-    conn.commit()
-    sid = cur.lastrowid
-    conn.close()
-    return sid
-
-
-def update_staging_record(staging_id, data):
-    """更新 staging 单条记录"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        UPDATE import_staging SET
-        question_id = ?, subject_id = ?, category_id = ?, category_name = ?,
-        stem = ?, option_a = ?, option_b = ?, option_c = ?, option_d = ?,
-        option_e = ?, option_f = ?, correct_answer = ?, explanation = ?
-        WHERE id = ?
-    """, (
-        data.get('question_id'),
-        data['subject_id'],
-        data.get('category_id'),
-        data.get('category_name'),
-        data['stem'],
-        data.get('option_a'),
-        data.get('option_b'),
-        data.get('option_c'),
-        data.get('option_d'),
-        data.get('option_e'),
-        data.get('option_f'),
-        data.get('correct_answer'),
-        data.get('explanation'),
-        staging_id,
-    ))
-    conn.commit()
-    conn.close()
-
-
-def delete_staging_record(staging_id):
-    """删除 staging 单条记录"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM import_staging WHERE id = ?", (staging_id,))
-    conn.commit()
-    conn.close()
-
-
-def clear_staging_by_subject(subject_id):
-    """清空某科目的所有 staging 记录（加重试机制）"""
-    import time
-    for attempt in range(3):
-        try:
-            conn = get_db()
-            cur = conn.cursor()
-            cur.execute("DELETE FROM import_staging WHERE subject_id = ?", (subject_id,))
-            conn.commit()
-            count = cur.rowcount
-            conn.close()
-            return count
-        except Exception:
-            conn.close()
-            time.sleep(0.3)
-
-
-def get_staging_record(staging_id):
-    """获取单条 staging 记录"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM import_staging WHERE id = ?", (staging_id,))
-    row = cur.fetchone()
-    result = dict(row) if row else None
-    conn.close()
-    return result
-
-
-# ==================== 邀请码相关 ====================
-
-import random
-
-def generate_invitation_code():
-    """生成邀请码：KEYIN-XXXX-XXXX 格式"""
-    chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-    part1 = ''.join(random.choices(chars, k=4))
-    part2 = ''.join(random.choices(chars, k=4))
-    return f"KEYIN-{part1}-{part2}"
-
-
-def create_invitation_code(code, subject_id, days=365, max_uses=1, expires_at=None, created_by=None):
-    """创建邀请码"""
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            "INSERT INTO invitation_codes (code, subject_id, days, max_uses, expires_at, created_by) VALUES (?, ?, ?, ?, ?, ?)",
-            (code, subject_id, days, max_uses, expires_at, created_by)
-        )
-        conn.commit()
-        return cur.lastrowid
-    except Exception:
-        return None
-    finally:
-        conn.close()
-
-
-def get_invitation_code(code):
-    """根据邀请码获取记录"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM invitation_codes WHERE code = ?", (code,))
-    row = cur.fetchone()
-    result = dict(row) if row else None
-    conn.close()
-    return result
-
-
-def validate_invitation_code(code):
-    """
-    验证邀请码是否可用。
-    返回: (valid, message, code_record)
-    """
-    record = get_invitation_code(code)
-    if not record:
-        return False, '邀请码不存在', None
-    
-    from datetime import datetime
-    if record['expires_at']:
-        expires = datetime.strptime(record['expires_at'], '%Y-%m-%d %H:%M:%S')
-        if datetime.now() > expires:
-            return False, '邀请码已过期', None
-    
-    if record['max_uses'] and record['used_count'] >= record['max_uses']:
-        return False, '邀请码已达到使用上限', None
-    
-    return True, '', record
-
-
-def use_invitation_code(code_id, user_id):
-    """标记邀请码已使用，记录日志"""
-    conn = get_db()
-    cur = conn.cursor()
-    try:
-        cur.execute("UPDATE invitation_codes SET used_count = used_count + 1 WHERE id = ?", (code_id,))
-        cur.execute(
-            "INSERT INTO invitation_code_logs (code_id, user_id) VALUES (?, ?)",
-            (code_id, user_id)
-        )
-        conn.commit()
-        return True
-    except Exception:
-        return False
-    finally:
-        conn.close()
-
-
-def list_invitation_codes(page=1, per_page=20, subject_id=None, status='all'):
-    """
-    分页列出邀请码。
-    status: 'all', 'active', 'used_up', 'expired', 'disabled'
-    """
-    from datetime import datetime
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    
-    where = []
-    params = []
-    
-    if subject_id:
-        where.append('ic.subject_id = ?')
-        params.append(subject_id)
-    
-    if status == 'active':
-        where.append('(ic.max_uses IS NULL OR ic.used_count < ic.max_uses)')
-        where.append('(ic.expires_at IS NULL OR ic.expires_at > ?)')
-        params.append(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    elif status == 'used_up':
-        where.append('ic.max_uses IS NOT NULL AND ic.used_count >= ic.max_uses')
-    elif status == 'expired':
-        where.append('ic.expires_at IS NOT NULL AND ic.expires_at <= ?')
-        params.append(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    
-    where_sql = ' AND '.join(where) if where else '1=1'
-    
-    # 总数
-    cur.execute(f"SELECT COUNT(*) FROM invitation_codes ic WHERE {where_sql}", params)
-    total = cur.fetchone()[0]
-    
-    # 分页
-    offset = (page - 1) * per_page
-    cur.execute(
-        f"""SELECT ic.*, s.name as subject_name, u.username as creator_name
-            FROM invitation_codes ic
-            LEFT JOIN subjects s ON s.id = ic.subject_id
-            LEFT JOIN users u ON u.id = ic.created_by
-            WHERE {where_sql}
-            ORDER BY ic.created_at DESC
-            LIMIT ? OFFSET ?""",
-        params + [per_page, offset]
-    )
-    rows = [dict(r) for r in cur.fetchall()]
-    
-    conn.close()
-    return rows, total
-
-
-def disable_invitation_code(code_id):
-    """禁用邀请码（将 max_uses 设为 0）"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE invitation_codes SET max_uses = 0 WHERE id = ?", (code_id,))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def delete_invitation_code(code_id):
-    """删除邀请码及其使用记录"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM invitation_code_logs WHERE code_id = ?", (code_id,))
-    cur.execute("DELETE FROM invitation_codes WHERE id = ?", (code_id,))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def get_code_usage_logs(code_id):
-    """获取邀请码的使用记录"""
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute(
-        """SELECT l.*, u.username
-            FROM invitation_code_logs l
-            JOIN users u ON u.id = l.user_id
-            WHERE l.code_id = ?
-            ORDER BY l.used_at DESC""",
-        (code_id,)
-    )
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows
-
-
-# 预定义安全问题列表
-SECURITY_QUESTIONS = {
-    '1': '你小学的名字？',
-    '2': '你最好的朋友叫什么？',
-    '3': '你最喜欢的颜色是什么？',
-    '4': '你出生的城市是哪里？',
-    '5': '你的第一只宠物叫什么？',
-}
-
-
-def get_security_question_text(question_index):
-    """根据问题索引号获取问题文本"""
-    return SECURITY_QUESTIONS.get(str(question_index))
-
-
-# ==================== 安全问题与密码找回 ====================
-
-
-def set_user_security(user_id, question_index, answer):
-    """设置用户安全问题（存索引号）和安全答案（pbkdf2 哈希）"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE users SET security_question = ?, security_answer = ? WHERE id = ?",
-        (str(question_index), hash_password(answer), user_id)
-    )
-    conn.commit()
-    conn.close()
-
-
-def check_security_answer(user_id, question_index, answer):
-    """验证安全问题答案（支持旧明文兼容，验证后自动升级）"""
-    from werkzeug.security import check_password_hash
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT security_question, security_answer FROM users WHERE id = ?",
-        (user_id,)
-    )
-    row = cur.fetchone()
-    conn.close()
-    if not row:
-        return False
-    
-    # 问题索引不匹配
-    if str(row[0]) != str(question_index):
-        return False
-    
-    stored = row[1]
-    # 新版：pbkdf2 哈希
-    if stored.startswith('pbkdf2:'):
-        return check_password_hash(stored, answer)
-    # 兼容旧版：明文比对，验证后自动升级
-    if stored == answer:
-        # 自动升级
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute(
-            "UPDATE users SET security_answer = ? WHERE id = ?",
-            (hash_password(answer), user_id)
-        )
-        conn.commit()
-        conn.close()
-        return True
-    return False
-
-
-def create_password_reset_token(user_id, hours=1):
-    """创建密码重置 token"""
-    import secrets
-    from datetime import datetime, timedelta
-    
-    token = secrets.token_urlsafe(32)
-    expires = (datetime.now() + timedelta(hours=hours)).strftime('%Y-%m-%d %H:%M:%S')
-    
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES (?, ?, ?)",
-        (user_id, token, expires)
-    )
-    conn.commit()
-    conn.close()
-    return token
-
-
-def verify_and_consume_reset_token(token):
-    """验证密码重置 token 并返回用户 ID，成功则销毁 token"""
-    from datetime import datetime
-    
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT user_id, expires_at FROM password_reset_tokens WHERE token = ?",
-        (token,)
-    )
-    row = cur.fetchone()
-    if not row:
-        conn.close()
-        return None
-    
-    user_id, expires_str = row
-    expires = datetime.strptime(expires_str, '%Y-%m-%d %H:%M:%S')
-    if datetime.now() > expires:
-        cur.execute("DELETE FROM password_reset_tokens WHERE token = ?", (token,))
-        conn.commit()
-        conn.close()
-        return None
-    
-    # 销毁 token
-    cur.execute("DELETE FROM password_reset_tokens WHERE token = ?", (token,))
-    conn.commit()
-    conn.close()
-    return user_id
-
-
-def get_user_by_username(username):
-    """根据用户名获取用户"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE username = ?", (username,))
-    row = cur.fetchone()
-    result = dict(row) if row else None
-    conn.close()
-    return result
-
-
-def reset_user_password(user_id, new_password):
-    """重置用户密码（管理员操作）"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE users SET password_hash = ? WHERE id = ?",
-        (hash_password(new_password), user_id)
-    )
-    conn.commit()
-    conn.close()
-    return True
-
-
-# ==================== 站点设置 ====================
-
-def get_site_setting(key, default=None):
-    """获取站点设置值"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT value FROM site_settings WHERE key = ?", (key,))
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if row else default
-
-
-def get_all_site_settings():
-    """获取所有站点设置"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM site_settings")
-    result = {row[0]: row[1] for row in cur.fetchall()}
-    conn.close()
-    return result
-
-
-def update_site_setting(key, value):
-    """更新站点设置值"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("INSERT OR REPLACE INTO site_settings (key, value) VALUES (?, ?)", (key, value))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def batch_update_site_settings(settings):
-    """批量更新站点设置，settings 为 dict {key: value}"""
-    conn = get_db()
-    cur = conn.cursor()
-    for key, value in settings.items():
-        cur.execute("INSERT OR REPLACE INTO site_settings (key, value) VALUES (?, ?)", (key, value))
-    conn.commit()
-    conn.close()
-    return True
-
-
-# ==================== 题目纠错、笔记、留言板 ====================
-
-def create_question_feedback(question_id, subject_id, user_id, content, image_path=None):
-    """创建题目纠错反馈"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO question_feedbacks (question_id, subject_id, user_id, content, image_path) VALUES (?, ?, ?, ?, ?)",
-        (question_id, subject_id, user_id, content[:500], image_path)
-    )
-    conn.commit()
-    row_id = cur.lastrowid
-    conn.close()
-    return row_id
-
-
-def list_feedbacks(subject_id=None, status='all', page=1, per_page=20):
-    """列出纠错反馈（管理端）"""
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    
-    where = []
-    params = []
-    if subject_id:
-        where.append('f.subject_id = ?')
-        params.append(subject_id)
-    if status != 'all':
-        where.append('f.status = ?')
-        params.append(status)
-    
-    where_sql = ' AND '.join(where) if where else '1=1'
-    
-    cur.execute(f"SELECT COUNT(*) FROM question_feedbacks f WHERE {where_sql}", params)
-    total = cur.fetchone()[0]
-    
-    offset = (page - 1) * per_page
-    cur.execute(
-        f"""SELECT f.*, u.username, s.name as subject_name
-            FROM question_feedbacks f
-            LEFT JOIN users u ON u.id = f.user_id
-            LEFT JOIN subjects s ON s.id = f.subject_id
-            WHERE {where_sql}
-            ORDER BY f.created_at DESC
-            LIMIT ? OFFSET ?""",
-        params + [per_page, offset]
-    )
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows, total
-
-
-def resolve_feedback(feedback_id, admin_id):
-    """标记纠错反馈为已处理"""
-    from datetime import datetime
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE question_feedbacks SET status = 'resolved', resolved_at = ?, resolved_by = ? WHERE id = ?",
-        (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), admin_id, feedback_id)
-    )
-    conn.commit()
-    conn.close()
-    return True
-
-
-def dismiss_feedback(feedback_id):
-    """标记纠错反馈为已忽略"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE question_feedbacks SET status = 'dismissed' WHERE id = ?", (feedback_id,))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def delete_feedback(feedback_id):
-    """删除纠错反馈"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM question_feedbacks WHERE id = ?", (feedback_id,))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def get_user_note(question_id, user_id):
-    """获取用户对某题的笔记"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM question_notes WHERE question_id = ? AND user_id = ?", (question_id, user_id))
-    row = cur.fetchone()
-    result = dict(row) if row else None
-    conn.close()
-    return result
-
-
-def save_user_note(question_id, subject_id, user_id, content, image_path=None):
-    """保存/更新用户笔记（每人每道题只有一条）"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT id FROM question_notes WHERE question_id = ? AND user_id = ?",
-        (question_id, user_id)
-    )
-    existing = cur.fetchone()
-    
-    if existing:
-        cur.execute(
-            "UPDATE question_notes SET content = ?, image_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (content[:500], image_path, existing[0])
-        )
-    else:
-        cur.execute(
-            "INSERT INTO question_notes (question_id, subject_id, user_id, content, image_path) VALUES (?, ?, ?, ?, ?)",
-            (question_id, subject_id, user_id, content[:500], image_path)
-        )
-    conn.commit()
-    conn.close()
-    return True
-
-
-def get_question_comments(question_id, page=1, per_page=20):
-    """获取某题的留言板（按时间倒序）"""
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    
-    cur.execute("SELECT COUNT(*) FROM question_comments WHERE question_id = ? AND status = 'active'", (question_id,))
-    total = cur.fetchone()[0]
-    
-    offset = (page - 1) * per_page
-    cur.execute(
-        """SELECT * FROM question_comments 
-           WHERE question_id = ? AND status = 'active' 
-           ORDER BY created_at DESC LIMIT ? OFFSET ?""",
-        (question_id, per_page, offset)
-    )
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows, total
-
-
-def create_comment(question_id, subject_id, user_id, username, content, image_path=None):
-    """创建留言"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO question_comments (question_id, subject_id, user_id, username, content, image_path) VALUES (?, ?, ?, ?, ?, ?)",
-        (question_id, subject_id, user_id, username, content[:500], image_path)
-    )
-    conn.commit()
-    row_id = cur.lastrowid
-    conn.close()
-    return row_id
-
-
-def delete_comment(comment_id):
-    """删除留言（软删除）"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("UPDATE question_comments SET status = 'deleted' WHERE id = ?", (comment_id,))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def list_comments(subject_id=None, page=1, per_page=20):
-    """列出所有留言（管理端）"""
-    conn = get_db()
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    
-    where = "c.status = 'active'"
-    params = []
-    if subject_id:
-        where += ' AND c.subject_id = ?'
-        params.append(subject_id)
-    
-    cur.execute(f"SELECT COUNT(*) FROM question_comments c WHERE {where}", params)
-    total = cur.fetchone()[0]
-    
-    offset = (page - 1) * per_page
-    cur.execute(
-        f"""SELECT c.*, s.name as subject_name
-            FROM question_comments c
-            LEFT JOIN subjects s ON s.id = c.subject_id
-            WHERE {where}
-            ORDER BY c.created_at DESC
-            LIMIT ? OFFSET ?""",
-        params + [per_page, offset]
-    )
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-    return rows, total
-
-
-def admin_delete_comment(comment_id):
-    """管理员硬删除留言"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("DELETE FROM question_comments WHERE id = ?", (comment_id,))
-    conn.commit()
-    conn.close()
-    return True
-
-
-def get_feedback_stats():
-    """获取纠错反馈统计"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT status, COUNT(*) FROM question_feedbacks GROUP BY status")
-    stats = {row[0]: row[1] for row in cur.fetchall()}
-    conn.close()
-    return stats
-
-
-def get_comment_stats():
-    """获取留言统计"""
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("SELECT status, COUNT(*) FROM question_comments GROUP BY status")
-    stats = {row[0]: row[1] for row in cur.fetchall()}
-    conn.close()
-    return stats

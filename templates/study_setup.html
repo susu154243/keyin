@@ -3,7 +3,7 @@
 {% block title %}学习设置 - {{ category.name }}{% endblock %}
 
 {% block content %}
-<div class="mb-4">
+<div class="mb-4 d-flex gap-2">
     <a href="{{ url_for('practice', subject_id=subject.id) }}" class="btn btn-outline-primary btn-sm">
         <i class="fas fa-arrow-left"></i> 返回章节练习
     </a>
@@ -12,6 +12,37 @@
 <div class="card">
     <h2 class="card-title"><i class="fas fa-sliders-h"></i> 学习设置</h2>
     <p class="text-muted mb-3">{{ category.name }} · 共 {{ progress.total }} 题</p>
+
+    <!-- 授权状态 -->
+    {% if license_info %}
+    <div class="license-alert mb-3">
+        {% if license_info.is_expired %}
+        <div class="alert alert-danger d-flex align-items-center">
+            <i class="fas fa-lock me-2"></i>
+            <div>
+                <strong>授权已过期</strong><br>
+                <small>请联系管理员续期</small>
+            </div>
+        </div>
+        {% elif license_info.days_left <= 30 %}
+        <div class="alert alert-warning d-flex align-items-center">
+            <i class="fas fa-clock me-2"></i>
+            <div>
+                <strong>授权即将过期</strong><br>
+                <small>剩余 {{ license_info.days_left }} 天，到期时间：{{ license_info.expires_at }}</small>
+            </div>
+        </div>
+        {% else %}
+        <div class="alert alert-success d-flex align-items-center">
+            <i class="fas fa-check-circle me-2"></i>
+            <div>
+                <strong>授权有效</strong><br>
+                <small>剩余 {{ license_info.days_left }} 天，到期时间：{{ license_info.expires_at }}</small>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endif %}
 
     <!-- P2-6: 继续上次练习 -->
     {% if session.get('practice') and session['practice'].get('category_id') == category.id %}
@@ -37,13 +68,6 @@
             <h3>练习模式</h3>
             <p>逐题即时反馈，SM-2调度，答错重做</p>
             <p class="text-primary fw-bold mb-1">{{ progress.unreviewed }} 道新题</p>
-            {% if not new_limit_info.can_do %}
-            <p class="text-danger fw-bold" style="font-size:0.85rem;">
-                <i class="fas fa-exclamation-triangle"></i> 今日新题已达上限（{{ new_limit_info.current }}/{{ new_limit_info.limit }}）
-            </p>
-            {% else %}
-            <p class="text-muted" style="font-size:0.85rem;">今日剩余：{{ new_limit_info.remaining }}/{{ new_limit_info.limit }} 题</p>
-            {% endif %}
             <div class="mode-action-check" id="practiceCheck"><i class="fas fa-check-circle"></i></div>
             <div class="mode-action-config" id="practiceConfig">
                 <div class="config-row">
@@ -57,11 +81,7 @@
                     <button class="btn btn-xs btn-outline-secondary quick-count" data-target="practiceCount" data-count="{{ progress.unreviewed }}">全部</button>
                 </div>
             </div>
-            {% if not new_limit_info.can_do %}
-            <button class="btn btn-secondary btn-sm mt-2" disabled><i class="fas fa-ban"></i> 已达上限</button>
-            {% else %}
             <button class="btn btn-primary btn-sm mt-2" onclick="startMode('practice')"><i class="fas fa-play"></i> 开始</button>
-            {% endif %}
         </div>
         {% else %}
         <div class="mode-action-card mode-exam disabled-card">
@@ -79,16 +99,8 @@
             <div class="mode-action-icon"><i class="fas fa-calendar-day"></i></div>
             <h3>今日复习</h3>
             <p class="text-warning fw-bold mb-1">{{ progress.due_today }} 题待复习</p>
-            <p>SM-2到期题目，按调度复习</p>
-            {% if not review_limit_info.can_do %}
-            <p class="text-danger fw-bold" style="font-size:0.85rem;">
-                <i class="fas fa-exclamation-triangle"></i> 今日复习已达上限（{{ review_limit_info.current }}/{{ review_limit_info.limit }}）
-            </p>
-            <button class="btn btn-secondary btn-sm mt-2" disabled><i class="fas fa-ban"></i> 已达上限</button>
-            {% else %}
-            <p class="text-muted" style="font-size:0.85rem;">今日剩余：{{ review_limit_info.remaining }}/{{ review_limit_info.limit }} 题</p>
+            <p>FSRS到期题目，按调度复习</p>
             <a href="{{ url_for('study_today_review', subject_id=subject.id, category_id=category.id) }}" class="btn btn-success btn-sm mt-2"><i class="fas fa-play"></i> 开始复习</a>
-            {% endif %}
         </div>
         {% else %}
         <div class="mode-action-card mode-today disabled-card">
@@ -183,188 +195,162 @@
         </div>
     </div>
 
-    <!-- 今日待复习题目列表（含卡片状态） -->
-    {% if due_today_list %}
-    <div class="due-today-section mb-4">
-        <h5><i class="fas fa-calendar-day"></i> 今日待复习（{{ due_today_list | length }} 题）</h5>
-        <div class="due-list">
-            {% for d in due_today_list %}
-            <div class="due-item">
-                <span class="due-id">{{ d.id }}</span>
-                <span class="card-badge badge-{{ d.card_state or 'review' }}">
-                    {% if d.card_state == 'learning' %}
-                        🟡 学习中 · 第{{ d.learning_step + 1 }}步
-                    {% elif d.card_state == 'relearning' %}
-                        🔴 重学中 · 第{{ d.learning_step + 1 }}步
-                    {% else %}
-                        🟢 复习中
-                    {% endif %}
-                </span>
-                {% if d.card_state == 'review' and d.interval %}
-                <span class="due-interval">间隔 {{ d.interval }}天</span>
-                {% endif %}
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- 学习/重学中题目（倒计时） -->
-    {% if learning_cards %}
-    <div class="learning-cards-section mb-4">
-        <h5><i class="fas fa-hourglass-half"></i> 学习中（{{ learning_cards | length }} 题）</h5>
-        <div class="learning-list" id="learningList">
-            {% for lc in learning_cards %}
-            <div class="learning-item" data-next-review="{{ lc.next_review }}">
-                <span class="learning-id">{{ lc.id }}</span>
-                <span class="card-badge {{ lc.badge_class }}">{{ lc.state_label }} · 第{{ lc.learning_step + 1 }}步</span>
-                <span class="learning-countdown" data-minutes="{{ lc.minutes_left }}">
-                    {% if lc.minutes_left > 0 %}
-                        还剩 {{ lc.minutes_left }} 分钟可复习
-                    {% else %}
-                        ✅ 可以复习了
-                    {% endif %}
-                </span>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- 评分分布 -->
-    {% if progress.reviewed > 0 or progress.distribution.get('未评分', 0) > 0 %}
-    {% set dist_total = progress.distribution.get('忘了', 0) + progress.distribution.get('模糊', 0) + progress.distribution.get('一般', 0) + progress.distribution.get('简单', 0) + progress.distribution.get('秒答', 0) + progress.distribution.get('未评分', 0) %}
-    <div class="distribution-section mb-4">
-        <h5><i class="fas fa-chart-bar"></i> 评分分布</h5>
-        <div class="dist-grid">
-            <div class="dist-item">
-                <span class="dist-label">😭 忘了</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['忘了'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #e63946;"></div></div>
-                <span class="dist-count">{{ progress.distribution['忘了'] }}</span>
-            </div>
-            <div class="dist-item">
-                <span class="dist-label">😕 模糊</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['模糊'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #f4a261;"></div></div>
-                <span class="dist-count">{{ progress.distribution['模糊'] }}</span>
-            </div>
-            <div class="dist-item">
-                <span class="dist-label">😐 一般</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['一般'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #e9c46a;"></div></div>
-                <span class="dist-count">{{ progress.distribution['一般'] }}</span>
-            </div>
-            <div class="dist-item">
-                <span class="dist-label">😊 简单</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['简单'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #2ec4b6;"></div></div>
-                <span class="dist-count">{{ progress.distribution['简单'] }}</span>
-            </div>
-            <div class="dist-item">
-                <span class="dist-label">🤩 秒答</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['秒答'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #4361ee;"></div></div>
-                <span class="dist-count">{{ progress.distribution['秒答'] }}</span>
-            </div>
-            {% if progress.distribution.get('未评分', 0) > 0 %}
-            <div class="dist-item">
-                <span class="dist-label">⚪ 未评分</span>
-                <div class="dist-bar-outer"><div class="dist-bar" style="width: {{ (progress.distribution['未评分'] / dist_total * 100)|round if dist_total > 0 else 0 }}%; background: #9ca3af;"></div></div>
-                <span class="dist-count">{{ progress.distribution['未评分'] }}</span>
-            </div>
-            {% endif %}
-        </div>
-    </div>
-    {% endif %}
-
-    <!-- 做题次数统计 -->
-    {% if attempt_stats %}
-    <div class="attempt-stats-section">
-        <div class="attempt-header">
-            <h4><i class="fas fa-chart-pie"></i> 做题次数统计</h4>
-            <div class="attempt-controls">
-                <select id="filterSelect" class="form-select form-select-sm" style="width: auto; display: inline-block;">
-                    <option value="all">全部</option>
-                    <option value="new">🆕 新题</option>
-                    <option value="good">✅ 掌握良好</option>
-                    <option value="weak">❌ 需加强</option>
-                    <option value="hot">🔥 高频</option>
-                </select>
-                <select id="sortSelect" class="form-select form-select-sm" style="width: auto; display: inline-block;">
+    <!-- 题目列表 -->
+    {% if review_items %}
+    <div class="question-list-section mb-4">
+        <div class="question-list-header">
+            <h5><i class="fas fa-list-ul"></i> 题目列表</h5>
+            <div class="question-list-controls">
+                <div class="review-tabs" id="reviewTabs">
+                    <button class="review-tab active" data-filter="all">全部 {{ review_items | length }}</button>
+                    <button class="review-tab" data-filter="unlearned">⚪ 未学习 <span id="unlearnedCount">0</span></button>
+                    <button class="review-tab" data-filter="due">🔴 待复习 <span id="dueCount">0</span></button>
+                    <button class="review-tab" data-filter="learning">🟡 学习中 <span id="learningCount">0</span></button>
+                    <button class="review-tab" data-filter="soon">🟠 即将复习 <span id="soonCount">0</span></button>
+                    <button class="review-tab" data-filter="mastered">🏆 已掌握 <span id="masteredCount">0</span></button>
+                </div>
+                <select id="sortSelect" class="form-select form-select-sm" style="width:auto;">
+                    <option value="id-asc">题目序号 ↑</option>
+                    <option value="review-asc">下次复习 ↑</option>
                     <option value="count-desc">做题次数 ↓</option>
                     <option value="count-asc">做题次数 ↑</option>
                     <option value="accuracy-asc">正确率 ↑</option>
                     <option value="accuracy-desc">正确率 ↓</option>
-                    <option value="review-asc">下次复习 ↑</option>
                 </select>
             </div>
         </div>
 
         <!-- 桌面端表格 -->
-        <div class="attempt-table d-none d-md-block">
-            <table class="table table-sm table-hover">
+        <div class="review-table-wrap d-none d-md-block">
+            <table class="review-table">
                 <thead>
                     <tr>
                         <th>题目</th>
-                        <th>答题次数</th>
+                        <th>状态</th>
+                        <th>答题</th>
                         <th>正确率</th>
                         <th>上次评分</th>
+                        <th>间隔</th>
                         <th>下次复习</th>
+                        <th>操作</th>
                     </tr>
                 </thead>
-                <tbody id="attemptTableBody">
-                    {% for s in attempt_stats %}
-                    {% set tag = '' %}
-                    {% set row_class = '' %}
-                    {% if s.attempt_count == 0 %}
-                        {% set tag = '🆕 新题' %}
-                        {% set row_class = 'row-new' %}
-                    {% elif s.accuracy >= 80 %}
-                        {% set tag = '✅ 掌握良好' %}
-                        {% set row_class = 'row-good' %}
-                    {% elif s.accuracy < 50 %}
-                        {% set tag = '❌ 需加强' %}
-                        {% set row_class = 'row-weak' %}
-                    {% elif s.attempt_count >= 5 %}
-                        {% set tag = '🔥 高频' %}
-                        {% set row_class = 'row-hot' %}
+                <tbody id="reviewTableBody">
+                    {% for s in review_items %}
+                    {% if s.filter_state == 'unlearned' %}
+                        {% set state_badge = 'badge-unlearned' %}
+                        {% set state_label = '⚪ 未学习' %}
+                    {% elif s.is_reinforce %}
+                        {% set state_badge = 'badge-reinforce' %}
+                        {% set state_label = '🔒 强化' %}
+                    {% elif s.filter_state == 'due' %}
+                        {% set state_badge = 'badge-due' %}
+                        {% set state_label = '🔴 待复习' %}
+                    {% elif s.filter_state == 'soon' %}
+                        {% set state_badge = 'badge-soon' %}
+                        {% set state_label = '🟠 即将复习' %}
+                    {% elif s.filter_state == 'mastered' %}
+                        {% set state_badge = 'badge-mastered' %}
+                        {% set state_label = '🏆 已掌握' %}
+                    {% else %}
+                        {% set state_badge = 'badge-learning' %}
+                        {% set state_label = '🟡 学习中' %}
                     {% endif %}
-                    <tr class="{{ row_class }}" data-filter="{{ 'new' if s.attempt_count == 0 else ('good' if s.accuracy >= 80 else ('weak' if s.accuracy < 50 else ('hot' if s.attempt_count >= 5 else 'all'))) }}" data-count="{{ s.attempt_count }}" data-accuracy="{{ s.accuracy or 0 }}" data-review="{% if s.next_review %}{{ s.next_review }}{% else %}9999{% endif %}">
-                        <td><strong>{{ s.id }}</strong> <span class="row-tag">{{ tag }}</span></td>
-                        <td>{{ s.attempt_count }} 次</td>
-                        <td>{{ s.accuracy }}% {{ ' -' if s.attempt_count == 0 else '' }}</td>
-                        <td>{{ s.inferred_quality or '未开始' }}</td>
-                        <td>{{ s.next_review_label }}</td>
+                    {% set acc_class = '' %}
+                    {% if s.accuracy >= 70 %}{% set acc_class = 'acc-good' %}
+                    {% elif s.accuracy < 50 %}{% set acc_class = 'acc-weak' %}{% endif %}
+                    <tr class="review-row"
+                        data-id="{{ s.id }}"
+                        data-filter="{{ s.filter_state }}"
+                        data-count="{{ s.attempt_count }}"
+                        data-accuracy="{{ s.accuracy or 0 }}"
+                        data-review="{% if s.next_review %}{{ s.next_review }}{% else %}9999{% endif %}"
+                        data-state="{{ s.card_state or 'review' }}">
+                        <td class="review-qid"><a href="{{ url_for('show_question', subject_id=subject.id, qid=s.id) }}">{{ s.id }}</a></td>
+                        <td><span class="card-badge {{ state_badge }}">{{ state_label }}</span></td>
+                        <td>{{ s.attempt_count }}次</td>
+                        <td class="{{ acc_class }}">{{ s.accuracy }}%</td>
+                        <td>{{ s.inferred_quality or '-' }}</td>
+                        <td>{% if s.interval %}{{ s.interval }}天{% else %}-{% endif %}</td>
+                        <td class="review-next">{{ s.next_review_label }}</td>
+                        <td>
+                            <div class="d-flex gap-1">
+                                <form action="{{ url_for('reset_question', subject_id=subject.id, category_id=category.id, qid=s.id) }}" method="post" style="display:inline;">
+                                    <button type="submit" class="btn btn-sm btn-outline-danger reset-btn" onclick="return confirm('确定重置题目 {{ s.id }} 为新题？');" title="重置为新题"><i class="fas fa-redo"></i></button>
+                                </form>
+                                {% if s.filter_state != 'unlearned' %}
+                                <form action="{{ url_for('skip_question_interval', subject_id=subject.id, category_id=category.id, qid=s.id) }}" method="post" style="display:inline;">
+                                    <button type="submit" class="btn btn-sm btn-outline-warning" title="跳过间隔，直接复习"><i class="fas fa-forward"></i> 直接复习</button>
+                                </form>
+                                {% endif %}
+                                {% if s.is_reinforce %}
+                                <a href="{{ url_for('memorize_mode', subject_id=subject.id, category_id=category.id, qid=s.id) }}" class="btn btn-sm btn-outline-dark" title="进入背题模式"><i class="fas fa-book-open"></i> 强化</a>
+                                {% endif %}
+                            </div>
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
 
-        <!-- 手机端卡片列表 -->
-        <div class="attempt-cards d-md-none" id="attemptCards">
-            {% for s in attempt_stats %}
-            {% set tag = '' %}
-            {% set row_class = '' %}
-            {% if s.attempt_count == 0 %}
-                {% set tag = '🆕 新题' %}
-                {% set row_class = 'row-new' %}
-            {% elif s.accuracy >= 80 %}
-                {% set tag = '✅ 掌握良好' %}
-                {% set row_class = 'row-good' %}
-            {% elif s.accuracy < 50 %}
-                {% set tag = '❌ 需加强' %}
-                {% set row_class = 'row-weak' %}
-            {% elif s.attempt_count >= 5 %}
-                {% set tag = '🔥 高频' %}
-                {% set row_class = 'row-hot' %}
+        <!-- 手机端卡片 -->
+        <div class="review-cards d-md-none" id="reviewCards">
+            {% for s in review_items %}
+            {% if s.filter_state == 'unlearned' %}
+                {% set state_badge = 'badge-unlearned' %}
+                {% set state_label = '⚪ 未学习' %}
+            {% elif s.is_reinforce %}
+                {% set state_badge = 'badge-reinforce' %}
+                {% set state_label = '🔒 强化' %}
+            {% elif s.filter_state == 'due' %}
+                {% set state_badge = 'badge-due' %}
+                {% set state_label = '🔴 待复习' %}
+            {% elif s.filter_state == 'soon' %}
+                {% set state_badge = 'badge-soon' %}
+                {% set state_label = '🟠 即将复习' %}
+            {% elif s.filter_state == 'mastered' %}
+                {% set state_badge = 'badge-mastered' %}
+                {% set state_label = '🏆 已掌握' %}
+            {% else %}
+                {% set state_badge = 'badge-learning' %}
+                {% set state_label = '🟡 学习中' %}
             {% endif %}
-            <div class="attempt-card {{ row_class }}" data-filter="{{ 'new' if s.attempt_count == 0 else ('good' if s.accuracy >= 80 else ('weak' if s.accuracy < 50 else ('hot' if s.attempt_count >= 5 else 'all'))) }}" data-count="{{ s.attempt_count }}" data-accuracy="{{ s.accuracy or 0 }}" data-review="{% if s.next_review %}{{ s.next_review }}{% else %}9999{% endif %}">
-                <div class="attempt-card-header">
-                    <strong>{{ s.id }}</strong>
-                    <span class="row-tag">{{ tag }}</span>
+            {% set acc_class = '' %}
+            {% if s.accuracy >= 70 %}{% set acc_class = 'acc-good' %}
+            {% elif s.accuracy < 50 %}{% set acc_class = 'acc-weak' %}{% endif %}
+            <div class="review-card"
+                 data-id="{{ s.id }}"
+                 data-filter="{{ s.filter_state }}"
+                 data-count="{{ s.attempt_count }}"
+                 data-accuracy="{{ s.accuracy or 0 }}"
+                 data-review="{% if s.next_review %}{{ s.next_review }}{% else %}9999{% endif %}"
+                 data-state="{{ s.card_state or 'review' }}">
+                <div class="review-card-top">
+                    <a href="{{ url_for('show_question', subject_id=subject.id, qid=s.id) }}" class="review-card-qid">{{ s.id }}</a>
+                    <span class="card-badge {{ state_badge }}">{{ state_label }}</span>
                 </div>
-                <div class="attempt-card-body">
-                    <span>次数: {{ s.attempt_count }}</span>
-                    <span>正确率: {{ s.accuracy }}%{{ ' -' if s.attempt_count == 0 else '' }}</span>
-                    <span>评分: {{ s.inferred_quality or '未开始' }}</span>
-                    <span>下次: {{ s.next_review_label }}</span>
+                <div class="review-card-stats">
+                    <span>{{ s.attempt_count }}次</span>
+                    <span class="{{ acc_class }}">{{ s.accuracy }}%</span>
+                    <span>{{ s.inferred_quality or '-' }}</span>
+                    <span>{% if s.interval %}{{ s.interval }}天{% endif %}</span>
+                    <span class="review-next">{{ s.next_review_label }}</span>
+                </div>
+                <div class="review-card-actions">
+                    <div class="d-flex gap-1">
+                        <form action="{{ url_for('reset_question', subject_id=subject.id, category_id=category.id, qid=s.id) }}" method="post" style="display:inline;">
+                            <button type="submit" class="btn btn-sm btn-outline-danger reset-btn" onclick="return confirm('确定重置题目 {{ s.id }} 为新题？');" title="重置为新题"><i class="fas fa-redo"></i> 重置</button>
+                        </form>
+                        {% if s.filter_state != 'unlearned' %}
+                        <form action="{{ url_for('skip_question_interval', subject_id=subject.id, category_id=category.id, qid=s.id) }}" method="post" style="display:inline;">
+                            <button type="submit" class="btn btn-sm btn-outline-warning" title="跳过间隔，直接复习"><i class="fas fa-forward"></i> 直接复习</button>
+                        </form>
+                        {% endif %}
+                        {% if s.is_reinforce %}
+                        <a href="{{ url_for('memorize_mode', subject_id=subject.id, category_id=category.id, qid=s.id) }}" class="btn btn-sm btn-outline-dark" title="进入背题模式"><i class="fas fa-book-open"></i> 强化</a>
+                        {% endif %}
+                    </div>
                 </div>
             </div>
             {% endfor %}
@@ -399,60 +385,117 @@ document.querySelectorAll('.quick-count').forEach(btn => {
     });
 });
 
-// 筛选和排序
-document.getElementById('filterSelect')?.addEventListener('change', applyFilterAndSort);
+// ========== 复习队列：标签筛选 + 排序 ==========
+let currentFilter = 'all';
+
+// 初始化标签按钮
+document.querySelectorAll('.review-tab').forEach(tab => {
+    tab.addEventListener('click', function() {
+        document.querySelectorAll('.review-tab').forEach(t => t.classList.remove('active'));
+        this.classList.add('active');
+        currentFilter = this.dataset.filter;
+        applyFilterAndSort();
+    });
+});
+
+// 排序选择
 document.getElementById('sortSelect')?.addEventListener('change', applyFilterAndSort);
 
 function applyFilterAndSort() {
-    const filter = document.getElementById('filterSelect').value;
-    const sort = document.getElementById('sortSelect').value;
+    const sort = document.getElementById('sortSelect')?.value || 'review-asc';
     
     // 桌面端表格
-    const rows = document.querySelectorAll('#attemptTableBody tr');
-    rows.forEach(row => {
-        const rowFilter = row.dataset.filter;
-        row.style.display = (filter === 'all' || rowFilter === filter) ? '' : 'none';
-    });
+    const tbody = document.getElementById('reviewTableBody');
+    if (tbody) {
+        const rows = Array.from(tbody.querySelectorAll('tr.review-row'));
+        rows.forEach(row => {
+            const rowFilter = row.dataset.filter;
+            const show = currentFilter === 'all' || rowFilter === currentFilter;
+            row.style.display = show ? '' : 'none';
+        });
+        // 排序
+        sortRows(rows, sort);
+        rows.forEach(row => tbody.appendChild(row));
+    }
     
     // 手机端卡片
-    const cards = document.querySelectorAll('#attemptCards .attempt-card');
-    cards.forEach(card => {
-        const cardFilter = card.dataset.filter;
-        card.style.display = (filter === 'all' || cardFilter === filter) ? '' : 'none';
-    });
-    
-    // 排序逻辑（简化：仅隐藏/显示）
-    // 完整排序需重新渲染，此处省略
+    const cardsWrap = document.getElementById('reviewCards');
+    if (cardsWrap) {
+        const cards = Array.from(cardsWrap.querySelectorAll('.review-card'));
+        cards.forEach(card => {
+            const cardFilter = card.dataset.filter;
+            card.style.display = (currentFilter === 'all' || cardFilter === currentFilter) ? '' : 'none';
+        });
+        sortRows(cards, sort);
+        cards.forEach(card => cardsWrap.appendChild(card));
+    }
 }
 
-// 学习步骤倒计时（每30秒刷新）
-function updateLearningCountdown() {
-    const now = Date.now();
-    document.querySelectorAll('.learning-countdown[data-minutes]').forEach(el => {
-        const item = el.closest('.learning-item');
-        if (!item) return;
-        const nextReviewStr = item.dataset.nextReview;
-        if (!nextReviewStr) return;
-        
-        const nextReview = new Date(nextReviewStr.replace(' ', 'T'));
-        const diffMs = nextReview.getTime() - now;
-        const diffMin = Math.max(0, Math.round(diffMs / 60000));
-        
-        if (diffMin > 0) {
-            el.textContent = `还剩 ${diffMin} 分钟可复习`;
-        } else {
-            el.textContent = '✅ 可以复习了';
-            el.style.color = '#059669';
-            el.style.fontWeight = 'bold';
+function sortRows(items, sort) {
+    items.sort((a, b) => {
+        switch (sort) {
+            case 'id-asc': {
+                // 按题目 ID 序号排序（提取末尾数字）
+                const getId = (el) => {
+                    const idStr = el.dataset.id || '';
+                    const parts = idStr.split('-');
+                    return parts.length > 1 ? parseInt(parts[parts.length - 1]) : 9999;
+                };
+                return getId(a) - getId(b);
+            }
+            case 'count-desc': return (parseInt(b.dataset.count) || 0) - (parseInt(a.dataset.count) || 0);
+            case 'count-asc': return (parseInt(a.dataset.count) || 0) - (parseInt(b.dataset.count) || 0);
+            case 'accuracy-asc': return (parseFloat(a.dataset.accuracy) || 0) - (parseFloat(b.dataset.accuracy) || 0);
+            case 'accuracy-desc': return (parseFloat(b.dataset.accuracy) || 0) - (parseFloat(a.dataset.accuracy) || 0);
+            case 'review-asc': default:
+                return (a.dataset.review || '9999').localeCompare(b.dataset.review || '9999');
         }
     });
 }
 
-// 初始执行 + 每30秒刷新
-if (document.querySelector('.learning-countdown')) {
-    updateLearningCountdown();
-    setInterval(updateLearningCountdown, 30000);
+// 初始化各标签计数
+function initReviewCounts() {
+    // 只从桌面端表格计数（两套 DOM 都存在，避免重复计数）
+    const allRows = document.querySelectorAll('#reviewTableBody tr.review-row');
+    const counts = { all: 0, unlearned: 0, due: 0, learning: 0, soon: 0, mastered: 0 };
+    allRows.forEach(el => {
+        const f = el.dataset.filter;
+        counts.all++;
+        if (f === 'unlearned') counts.unlearned++;
+        if (f === 'due') counts.due++;
+        if (f === 'learning') counts.learning++;
+        if (f === 'soon') counts.soon++;
+        if (f === 'mastered') counts.mastered++;
+    });
+    const unlearnedEl = document.getElementById('unlearnedCount');
+    if (unlearnedEl) unlearnedEl.textContent = counts.unlearned;
+    const dueEl = document.getElementById('dueCount');
+    if (dueEl) dueEl.textContent = counts.due;
+    const learningEl = document.getElementById('learningCount');
+    if (learningEl) learningEl.textContent = counts.learning;
+    const soonEl = document.getElementById('soonCount');
+    if (soonEl) soonEl.textContent = counts.soon;
+    const masteredEl = document.getElementById('masteredCount');
+    if (masteredEl) masteredEl.textContent = counts.mastered;
+    
+    // 数量为 0 的标签隐藏
+    const hideFilters = [];
+    if (counts.unlearned === 0) hideFilters.push('unlearned');
+    if (counts.due === 0) hideFilters.push('due');
+    if (counts.learning === 0) hideFilters.push('learning');
+    if (counts.soon === 0) hideFilters.push('soon');
+    if (counts.mastered === 0) hideFilters.push('mastered');
+    hideFilters.forEach(f => {
+        const tab = document.querySelector(`.review-tab[data-filter="${f}"]`);
+        if (tab) tab.style.display = 'none';
+    });
 }
+
+// 页面加载后执行
+initReviewCounts();
+
+// 初始执行筛选排序
+applyFilterAndSort();
 </script>
 
 <style>
@@ -499,23 +542,24 @@ if (document.querySelector('.learning-countdown')) {
 /* 已掌握卡片 */
 .mode-action-card.mode-mastered .mode-action-icon { color: #f59e0b; }
 
-/* 今日待复习列表 */
-.due-today-section h5 { margin-bottom: 0.75rem; font-size: 1rem; color: var(--gray-700); }
-.due-list { display: flex; flex-direction: column; gap: 0.5rem; }
-.due-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem; background: var(--gray-50); border-radius: var(--border-radius-sm); font-size: 0.85rem; }
-.due-id { font-weight: 600; min-width: 80px; }
-.card-badge { padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 500; }
-.badge-learning { background: #fef3c7; color: #92400e; }
-.badge-relearning { background: #fee2e2; color: #991b1b; }
-.badge-review { background: #d1fae5; color: #065f46; }
-.due-interval { color: var(--gray-500); margin-left: auto; }
+.card-badge { padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 500; }
 
-/* 学习中列表 */
-.learning-cards-section h5 { margin-bottom: 0.75rem; font-size: 1rem; color: var(--gray-700); }
-.learning-list { display: flex; flex-direction: column; gap: 0.5rem; }
-.learning-item { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.75rem; background: #f8f9fa; border-radius: var(--border-radius-sm); font-size: 0.85rem; border-left: 3px solid #f59e0b; }
-.learning-id { font-weight: 600; min-width: 80px; }
-.learning-countdown { margin-left: auto; color: var(--gray-600); font-weight: 500; }
+/* 重置按钮 */
+.reset-btn { font-size: 0.75rem; padding: 0.15rem 0.4rem; }
+.review-table .review-table td:last-child { text-align: center; }
+.review-card-actions {
+    display: flex;
+    justify-content: center;
+    padding: 0.5rem 0 0.25rem;
+    border-top: 1px solid #f0f0f0;
+    margin-top: 0.25rem;
+}
+.badge-unlearned { background: #f1f5f9; color: #64748b; }
+.badge-due { background: #fee2e2; color: #991b1b; }
+.badge-learning { background: #fef3c7; color: #92400e; }
+.badge-soon { background: #ffedd5; color: #c2410c; }
+.badge-mastered { background: #fef9e7; color: #b45309; }
+.badge-reinforce { background: #f3e8ff; color: #6b21a8; }
 .mode-action-card.mode-mastered:not(.disabled-card) { background: rgba(245, 158, 11, 0.05); }
 
 /* 四指标栏 */
@@ -566,27 +610,120 @@ if (document.querySelector('.learning-countdown')) {
 .dist-bar { height: 100%; border-radius: 4px; transition: width 0.3s; }
 .dist-count { min-width: 30px; text-align: right; font-size: 0.85rem; font-weight: 600; }
 
-/* 做题次数统计 */
-.attempt-stats-section { margin-top: 1rem; }
-.attempt-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem; }
-.attempt-header h4 { margin: 0; }
-.attempt-controls { display: flex; gap: 0.5rem; }
-.attempt-table table { font-size: 0.85rem; }
-.row-new { background: rgba(46,196,182,0.08); }
-.row-good { background: rgba(67,97,238,0.08); }
-.row-weak { background: rgba(230,57,70,0.08); }
-.row-hot { background: rgba(255,183,3,0.08); }
-.row-tag { font-size: 0.7rem; margin-left: 0.5rem; }
+/* 复习队列 */
+.review-queue-section { margin-top: 1rem; }
+.review-queue-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.review-queue-header h5 { margin: 0; font-size: 1rem; }
+.review-queue-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+.review-tabs {
+    display: flex;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+}
+.review-tab {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.75rem;
+    border: 1px solid var(--gray-300);
+    border-radius: 4px;
+    background: white;
+    color: var(--gray-600);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+}
+.review-tab:hover { background: var(--gray-100); }
+.review-tab.active {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+.review-tab span {
+    font-size: 0.7rem;
+    opacity: 0.8;
+}
 
-/* 手机端卡片 */
-.attempt-cards { display: flex; flex-direction: column; gap: 0.5rem; }
-.attempt-card { padding: 0.75rem; border-radius: 6px; border-left: 3px solid var(--gray-300); }
-.attempt-card.row-new { border-left-color: var(--success-color); background: rgba(46,196,182,0.08); }
-.attempt-card.row-good { border-left-color: var(--primary-color); background: rgba(67,97,238,0.08); }
-.attempt-card.row-weak { border-left-color: var(--danger-color); background: rgba(230,57,70,0.08); }
-.attempt-card.row-hot { border-left-color: var(--warning-color); background: rgba(255,183,3,0.08); }
-.attempt-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem; }
-.attempt-card-body { display: flex; gap: 1rem; font-size: 0.8rem; color: var(--gray-600); flex-wrap: wrap; }
+/* 桌面端复习表格 */
+.review-table-wrap { overflow-x: auto; }
+.review-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+.review-table th {
+    background: var(--gray-100);
+    padding: 0.5rem 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    color: var(--gray-700);
+    border-bottom: 2px solid var(--gray-200);
+    white-space: nowrap;
+}
+.review-table td {
+    padding: 0.4rem 0.75rem;
+    border-bottom: 1px solid var(--gray-100);
+    vertical-align: middle;
+}
+.review-table tbody tr:hover { background: var(--gray-50); }
+.review-qid a {
+    font-weight: 600;
+    color: var(--gray-800);
+    text-decoration: none;
+}
+.review-qid a:hover { color: var(--primary-color); }
+.card-badge { padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.7rem; font-weight: 500; white-space: nowrap; }
+.badge-unlearned { background: #f1f5f9; color: #64748b; }
+.badge-due { background: #fee2e2; color: #991b1b; }
+.badge-learning { background: #fef3c7; color: #92400e; }
+.badge-soon { background: #ffedd5; color: #c2410c; }
+.badge-mastered { background: #fef9e7; color: #b45309; }
+.acc-good { color: #059669; font-weight: 500; }
+.acc-weak { color: #e63946; font-weight: 500; }
+.review-next {
+    white-space: nowrap;
+    font-size: 0.8rem;
+    color: var(--gray-600);
+}
+
+/* 手机端复习卡片 */
+.review-cards { display: flex; flex-direction: column; gap: 0.5rem; }
+.review-card {
+    padding: 0.75rem;
+    border-radius: 8px;
+    background: var(--gray-50);
+    border-left: 3px solid var(--gray-300);
+}
+.review-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.4rem;
+}
+.review-card-qid {
+    font-weight: 600;
+    color: var(--gray-800);
+    text-decoration: none;
+    font-size: 0.9rem;
+}
+.review-card-qid:hover { color: var(--primary-color); }
+.review-card-stats {
+    display: flex;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--gray-600);
+    flex-wrap: wrap;
+}
 
 .resume-alert .alert { margin-bottom: 0; padding: 0.75rem 1rem; }
 </style>

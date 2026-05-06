@@ -1,0 +1,216 @@
+{% extends "admin/base.html" %}
+
+{% block title %}邀请码管理 - 刻印后台{% endblock %}
+
+{% block content %}
+<div class="admin-header">
+    <h1><i class="fas fa-ticket-alt"></i> 邀请码管理</h1>
+</div>
+
+<!-- 生成邀请码表单 -->
+<div style="background: white; border-radius: var(--border-radius); padding: 1.5rem; box-shadow: var(--box-shadow); margin-bottom: 1.5rem;">
+    <h3 style="margin: 0 0 1rem;">生成邀请码</h3>
+    <form id="generateForm" method="post" action="{{ url_for('admin.admin_codes_generate') }}" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; align-items: end;">
+        <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">科目</label>
+            <select name="subject_id" class="form-control" required>
+                <option value="">选择科目</option>
+                {% for s in subjects %}
+                    <option value="{{ s.id }}" {% if current_subject == s.id %}selected{% endif %}>{{ s.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">授权天数</label>
+            <input type="number" name="days" value="365" min="1" class="form-control" placeholder="365">
+        </div>
+        <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">使用次数</label>
+            <select name="max_uses" class="form-control">
+                <option value="1">单次使用</option>
+                <option value="5">5次</option>
+                <option value="10">10次</option>
+                <option value="0">不限</option>
+            </select>
+        </div>
+        <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">过期时间</label>
+            <select name="expires_days" class="form-control">
+                <option value="">永不过期</option>
+                <option value="7">7天后</option>
+                <option value="30">30天后</option>
+                <option value="90">90天后</option>
+                <option value="180">180天后</option>
+            </select>
+        </div>
+        <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 4px;">生成数量</label>
+            <input type="number" name="count" value="1" min="1" max="100" class="form-control">
+        </div>
+        <div>
+            <button type="submit" class="btn btn-primary" style="width: 100%;">
+                <i class="fas fa-plus"></i> 生成
+            </button>
+        </div>
+    </form>
+</div>
+
+<!-- 生成的邀请码显示区 -->
+<div id="generatedCodes" style="display: none; background: white; border-radius: var(--border-radius); padding: 1.5rem; box-shadow: var(--box-shadow); margin-bottom: 1.5rem; border: 2px solid #4a90d9;">
+    <h3 style="margin: 0 0 0.5rem; color: #4a90d9;">✅ 生成成功</h3>
+    <p id="generatedInfo" style="color: #666; font-size: 0.9rem; margin: 0 0 1rem;"></p>
+    <div id="codesList" style="font-family: monospace; font-size: 0.95rem; line-height: 1.8;"></div>
+    <button onclick="copyAllCodes()" class="btn btn-sm" style="margin-top: 0.5rem; background: #6c757d; color: white;">
+        <i class="fas fa-copy"></i> 复制全部
+    </button>
+</div>
+
+<!-- 筛选 -->
+<div style="background: white; border-radius: var(--border-radius); padding: 1rem; box-shadow: var(--box-shadow); margin-bottom: 1.5rem; display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;">
+    <a href="{{ url_for('admin.admin_codes', status='all') }}" class="btn btn-sm {% if current_status == 'all' %}btn-primary{% else %}btn-outline{% endif %}">全部</a>
+    <a href="{{ url_for('admin.admin_codes', status='active') }}" class="btn btn-sm {% if current_status == 'active' %}btn-primary{% else %}btn-outline{% endif %}">可用</a>
+    <a href="{{ url_for('admin.admin_codes', status='used_up') }}" class="btn btn-sm {% if current_status == 'used_up' %}btn-primary{% else %}btn-outline{% endif %}">已用完</a>
+    <a href="{{ url_for('admin.admin_codes', status='expired') }}" class="btn btn-sm {% if current_status == 'expired' %}btn-primary{% else %}btn-outline{% endif %}">已过期</a>
+    {% if current_subject %}
+        <span style="color: #666; font-size: 0.85rem;">科目: {{ subjects|selectattr('id', 'equalto', current_subject)|map(attribute='name')|join(', ') }}</span>
+    {% endif %}
+</div>
+
+<!-- 邀请码列表 -->
+<div style="background: white; border-radius: var(--border-radius); box-shadow: var(--box-shadow); overflow: hidden;">
+    <table class="data-table" style="width: 100%; border-collapse: collapse;">
+        <thead>
+            <tr style="background: var(--gray-100);">
+                <th style="padding: 0.75rem; text-align: left;">邀请码</th>
+                <th style="padding: 0.75rem; text-align: left;">科目</th>
+                <th style="padding: 0.75rem; text-align: center;">使用次数</th>
+                <th style="padding: 0.75rem; text-align: center;">授权天数</th>
+                <th style="padding: 0.75rem; text-align: center;">状态</th>
+                <th style="padding: 0.75rem; text-align: center;">创建时间</th>
+                <th style="padding: 0.75rem; text-align: center;">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for code in codes %}
+            <tr style="border-bottom: 1px solid var(--gray-200);">
+                <td style="padding: 0.75rem; font-family: monospace; font-size: 0.9rem;">{{ code.code }}</td>
+                <td style="padding: 0.75rem;">{{ code.subject_name or '-' }}</td>
+                <td style="padding: 0.75rem; text-align: center;">
+                    {{ code.used_count }}{% if code.max_uses %}/{{ code.max_uses }}{% else %}/不限{% endif %}
+                </td>
+                <td style="padding: 0.75rem; text-align: center;">{{ code.days }}</td>
+                <td style="padding: 0.75rem; text-align: center;">
+                    {% if code.max_uses == 0 %}
+                        <span class="badge badge-danger">已禁用</span>
+                    {% elif code.max_uses and code.used_count >= code.max_uses %}
+                        <span class="badge badge-warning">已用完</span>
+                    {% elif code.expires_at and code.expires_at < current_time %}
+                        <span class="badge badge-secondary">已过期</span>
+                    {% else %}
+                        <span class="badge badge-success">可用</span>
+                    {% endif %}
+                </td>
+                <td style="padding: 0.75rem; text-align: center; font-size: 0.85rem; color: #666;">{{ code.created_at[:19] if code.created_at else '-' }}</td>
+                <td style="padding: 0.75rem; text-align: center;">
+                    <button onclick="copyCode('{{ code.code }}')" class="btn btn-sm btn-outline" title="复制">
+                        <i class="fas fa-copy"></i>
+                    </button>
+                    <a href="{{ url_for('admin.admin_code_logs', code_id=code.id) }}" class="btn btn-sm btn-outline" title="查看使用记录">
+                        <i class="fas fa-list"></i>
+                    </a>
+                    {% if code.max_uses != 0 %}
+                    <form method="post" action="{{ url_for('admin.admin_codes_disable', code_id=code.id) }}" style="display: inline;">
+                        <button type="submit" class="btn btn-sm btn-warning" onclick="return confirm('确定禁用此邀请码？')" title="禁用">
+                            <i class="fas fa-ban"></i>
+                        </button>
+                    </form>
+                    {% endif %}
+                    <form method="post" action="{{ url_for('admin.admin_codes_delete', code_id=code.id) }}" style="display: inline;">
+                        <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('确定删除此邀请码？此操作不可恢复')" title="删除">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            {% if not codes %}
+            <tr>
+                <td colspan="7" style="padding: 2rem; text-align: center; color: #999;">暂无邀请码</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+<!-- 分页 -->
+{% if total_pages > 1 %}
+<div style="margin-top: 1rem; display: flex; justify-content: center; gap: 0.5rem;">
+    {% for p in range(1, total_pages + 1) %}
+        <a href="{{ url_for('admin.admin_codes', page=p, status=current_status, subject_id=current_subject) }}"
+           class="btn btn-sm {% if p == page %}btn-primary{% else %}btn-outline{% endif %}">{{ p }}</a>
+    {% endfor %}
+</div>
+{% endif %}
+
+<script>
+// 生成邀请码表单 - AJAX 提交
+document.getElementById('generateForm').addEventListener('submit', function(e) {
+    e.preventDefault();
+    const formData = new FormData(this);
+    fetch(this.action, {
+        method: 'POST',
+        body: formData,
+        headers: { 'Accept': 'application/json' }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            const info = document.getElementById('generatedInfo');
+            info.textContent = `科目: ${data.subject} | 授权: ${data.days}天 | 共 ${data.codes.length} 个`;
+            const list = document.getElementById('codesList');
+            list.innerHTML = data.codes.map(c => `<div>${c} <button onclick="copyCode('${c}')" class="btn btn-sm" style="background:none;color:#4a90d9;padding:0;"><i class="fas fa-copy"></i></button></div>`).join('');
+            document.getElementById('generatedCodes').style.display = 'block';
+            // 刷新页面列表
+            setTimeout(() => location.reload(), 2000);
+        }
+    })
+    .catch(err => {
+        alert('生成失败: ' + err);
+    });
+});
+
+function copyCode(code) {
+    navigator.clipboard.writeText(code).then(() => {
+        // 短暂提示
+        const msg = document.createElement('span');
+        msg.textContent = ' 已复制!';
+        msg.style.color = '#28a745';
+        msg.style.fontSize = '0.8rem';
+        event.target.closest('button, a').appendChild(msg);
+        setTimeout(() => msg.remove(), 1500);
+    });
+}
+
+function copyAllCodes() {
+    const codes = Array.from(document.querySelectorAll('#codesList div')).map(d => d.textContent.trim());
+    navigator.clipboard.writeText(codes.join('\n')).then(() => {
+        alert(`已复制 ${codes.length} 个邀请码`);
+    });
+}
+</script>
+
+<style>
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; font-weight: 600; }
+.badge-success { background: #d4edda; color: #155724; }
+.badge-warning { background: #fff3cd; color: #856404; }
+.badge-danger { background: #f8d7da; color: #721c24; }
+.badge-secondary { background: #e2e3e5; color: #383d41; }
+.btn-sm { padding: 4px 8px; font-size: 0.8rem; border: none; border-radius: 4px; cursor: pointer; margin: 0 2px; }
+.btn-primary { background: #4a90d9; color: white; }
+.btn-outline { background: transparent; color: #4a90d9; border: 1px solid #4a90d9; }
+.btn-warning { background: #ffc107; color: #333; }
+.btn-danger { background: #dc3545; color: white; }
+.form-control { padding: 8px 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.9rem; width: 100%; box-sizing: border-box; }
+</style>
+
+{% endblock %}

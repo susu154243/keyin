@@ -1,0 +1,33 @@
+<div class="card feature-card {% if not subject.has_permission %}subject-locked{% endif %}">
+    <div class="feature-icon">
+        <span style="font-size: 2rem;">{{ subject.icon }}</span>
+    </div>
+    <h3 class="card-title">{{ subject.name }}</h3>
+    <p class="card-text">{{ subject.description }}</p>
+    <div class="mt-auto">
+        {% if subject.has_permission %}
+        <a href="{{ url_for('subject_detail', subject_id=subject.id) }}" class="btn btn-primary btn-block">
+            <i class="fas fa-arrow-right"></i> 进入学习
+        </a>
+        {% if subject.license_info %}
+        {% if subject.license_info.is_expired %}
+        <div class="license-status license-expired">
+            <i class="fas fa-lock"></i> 授权已过期
+        </div>
+        {% elif subject.license_info.days_left <= 30 %}
+        <div class="license-status license-warning">
+            <i class="fas fa-clock"></i> 剩余 {{ subject.license_info.days_left }} 天
+        </div>
+        {% else %}
+        <div class="license-status license-ok">
+            <i class="fas fa-check-circle"></i> 剩余 {{ subject.license_info.days_left }} 天
+        </div>
+        {% endif %}
+        {% endif %}
+        {% else %}
+        <span class="btn btn-block btn-locked">
+            <i class="fas fa-lock"></i> 未授权
+        </span>
+        {% endif %}
+    </div>
+</div>

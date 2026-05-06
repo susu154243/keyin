@@ -21,7 +21,7 @@
             <div class="mastered-header" onclick="toggleMastered('{{ q.id }}')">
                 <div class="mastered-title">
                     <span class="mastered-qid">{{ q.id }}</span>
-                    <span class="mastered-stem-preview">{{ q.stem[:80] }}{% if q.stem | length > 80 %}...{% endif %}</span>
+                    <span class="mastered-stem-preview">{{ (q.stem | striptags)[:80] }}{% if q.stem | length > 80 %}...{% endif %}</span>
                 </div>
                 <div class="mastered-badges">
                     <span class="badge badge-quality">{{ q.inferred_quality or '已掌握' }}</span>
@@ -33,7 +33,7 @@
             <div class="mastered-detail" id="detail-{{ q.id }}" style="display: none;">
                 <div class="detail-section">
                     <h5>题干</h5>
-                    <p class="stem-full">{{ q.stem }}</p>
+                    <p class="stem-full">{{ q.stem | safe }}</p>
                 </div>
                 {% if q.options and q.options != '{}' %}
                 <div class="detail-section">
@@ -56,7 +56,7 @@
                 {% if q.explanation %}
                 <div class="detail-section">
                     <h5>解析</h5>
-                    <p class="explanation-text">{{ q.explanation }}</p>
+                    <p class="explanation-text">{{ q.explanation | safe }}</p>
                 </div>
                 {% endif %}
                 <div class="detail-footer">

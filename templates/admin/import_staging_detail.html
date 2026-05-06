@@ -1,0 +1,133 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="staging-detail">
+    <div class="detail-header">
+        <div>
+            <a href="{{ url_for('admin.import_staging') }}" class="back-link">← 返回确认库</a>
+            <h1>📝 待确认题目</h1>
+        </div>
+        <div class="header-actions">
+            <form action="{{ url_for('admin.import_staging_confirm_all', subject_id=subject_id) }}" method="POST" 
+                  onsubmit="return confirm('确定将这 {{ total }} 条题目全部导入正式题库吗？导入后无法撤销。')">
+                <button type="submit" class="btn btn-success">✅ 全部导入 ({{ total }} 条)</button>
+            </form>
+            <form action="{{ url_for('admin.import_staging_clear', subject_id=subject_id) }}" method="POST"
+                  onsubmit="return confirm('确定清空这 {{ total }} 条题目吗？')">
+                <button type="submit" class="btn btn-danger">🗑️ 清空全部</button>
+            </form>
+        </div>
+    </div>
+    
+    {% if staging %}
+    <!-- 搜索 -->
+    <div class="search-bar">
+        <form method="GET" class="search-form">
+            <input type="text" name="search" value="{{ search }}" placeholder="搜索题干或编号..." class="search-input">
+            <button type="submit" class="btn btn-primary">搜索</button>
+            {% if search %}<a href="{{ url_for('admin.import_staging_detail', subject_id=subject_id) }}" class="btn">清除</a>{% endif %}
+        </form>
+    </div>
+    
+    <!-- 题目列表 -->
+    <table class="staging-table">
+        <thead>
+            <tr>
+                <th width="60">编号</th>
+                <th>题干</th>
+                <th width="80">答案</th>
+                <th width="120">分类</th>
+                <th width="140">操作</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in staging %}
+            <tr>
+                <td>
+                    <span class="q-num">{{ item.question_id or '-' }}</span>
+                </td>
+                <td>
+                    <div class="stem-cell">
+                        <div class="stem-text">{{ item.stem[:120] }}{% if item.stem|length > 120 %}...{% endif %}</div>
+                        <div class="options-preview">
+                            {% if item.option_a %}<span class="opt">A. {{ item.option_a[:30] }}</span>{% endif %}
+                            {% if item.option_b %}<span class="opt">B. {{ item.option_b[:30] }}</span>{% endif %}
+                        </div>
+                    </div>
+                </td>
+                <td>
+                    <span class="answer-badge">{{ item.correct_answer }}</span>
+                </td>
+                <td>
+                    <span class="category-badge">{{ item.category_name or '未分类' }}</span>
+                </td>
+                <td>
+                    <div class="action-buttons">
+                        <a href="{{ url_for('admin.import_staging_edit', staging_id=item.id) }}" class="btn btn-sm btn-primary">✏️ 编辑</a>
+                        <form action="{{ url_for('admin.import_staging_delete', staging_id=item.id) }}" method="POST" style="display:inline"
+                              onsubmit="return confirm('确定删除这条题目吗？')">
+                            <button type="submit" class="btn btn-sm btn-danger">🗑️</button>
+                        </form>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    <!-- 分页 -->
+    {% if total_pages > 1 %}
+    <div class="pagination">
+        {% for p in range(1, total_pages + 1) %}
+            {% if p == page %}
+                <span class="page-current">{{ p }}</span>
+            {% else %}
+                <a href="{{ url_for('admin.import_staging_detail', subject_id=subject_id, page=p, search=search) }}" class="page-link">{{ p }}</a>
+            {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+    
+    {% else %}
+    <div class="empty-state">
+        <p>{% if search %}没有找到匹配的题目{% else %}✅ 该科目的确认库为空{% endif %}</p>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.staging-detail { max-width: 1200px; }
+.detail-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+.back-link { color: #6b7280; text-decoration: none; font-size: 14px; }
+.back-link:hover { color: #111827; }
+.header-actions { display: flex; gap: 8px; }
+.search-bar { margin-bottom: 16px; }
+.search-form { display: flex; gap: 8px; }
+.search-input { flex: 1; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; }
+
+.staging-table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.staging-table th { background: #f9fafb; padding: 12px; text-align: left; font-weight: 600; border-bottom: 2px solid #e5e7eb; }
+.staging-table td { padding: 12px; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+.staging-table tr:hover { background: #f9fafb; }
+
+.q-num { font-weight: 600; color: #4f46e5; }
+.stem-cell { max-width: 500px; }
+.stem-text { font-size: 14px; line-height: 1.4; margin-bottom: 4px; }
+.options-preview { display: flex; gap: 8px; flex-wrap: wrap; }
+.opt { font-size: 12px; color: #6b7280; background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
+
+.answer-badge { background: #dcfce7; color: #166534; padding: 4px 8px; border-radius: 4px; font-weight: 600; font-size: 14px; }
+.category-badge { font-size: 13px; color: #6b7280; }
+
+.action-buttons { display: flex; gap: 4px; }
+.btn-sm { padding: 4px 8px; font-size: 13px; }
+
+.pagination { display: flex; gap: 4px; margin-top: 16px; justify-content: center; }
+.page-link, .page-current { padding: 6px 12px; border-radius: 6px; text-decoration: none; }
+.page-link { background: #fff; border: 1px solid #d1d5db; color: #374151; }
+.page-link:hover { background: #f3f4f6; }
+.page-current { background: #4f46e5; color: #fff; }
+
+.empty-state { text-align: center; padding: 40px; background: #f9fafb; border-radius: 8px; margin-top: 20px; }
+.empty-state p { color: #6b7280; }
+</style>
+{% endblock %}

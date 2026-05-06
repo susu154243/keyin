@@ -1,0 +1,65 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="staging-page">
+    <h1>📋 导入确认库</h1>
+    <p class="text-muted">从 apkg 导入的题目会先进入确认库，确认无误后再导入正式题库</p>
+    
+    {% if staging_counts %}
+    <div class="staging-list">
+        {% for item in staging_counts %}
+        <div class="staging-card">
+            <div class="staging-card-header">
+                <span class="subject-name">{{ item.name }}</span>
+                <span class="badge">{{ item.count }} 条待确认</span>
+            </div>
+            <div class="staging-card-actions">
+                <a href="{{ url_for('admin.import_staging_detail', subject_id=item.id) }}" class="btn btn-primary">📝 查看/编辑</a>
+                <form action="{{ url_for('admin.import_staging_clear', subject_id=item.id) }}" method="POST" style="display:inline" onsubmit="return confirm('确定清空这 {{ item.count }} 条待确认题目吗？')">
+                    <button type="submit" class="btn btn-danger">🗑️ 清空</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">
+        <p>✅ 确认库为空，没有待确认的题目</p>
+        <a href="{{ url_for('admin.import_apkg') }}" class="btn btn-primary">📥 导入 apkg 文件</a>
+    </div>
+    {% endif %}
+</div>
+
+<style>
+.staging-page { max-width: 800px; }
+.staging-list { display: flex; flex-direction: column; gap: 16px; margin-top: 20px; }
+.staging-card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.staging-card-header { display: flex; align-items: center; gap: 12px; }
+.subject-name { font-size: 18px; font-weight: 600; }
+.badge {
+    background: #fef3c7;
+    color: #92400e;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 500;
+}
+.staging-card-actions { display: flex; gap: 8px; }
+.empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    background: #f9fafb;
+    border-radius: 8px;
+    margin-top: 20px;
+}
+.empty-state p { font-size: 18px; margin-bottom: 20px; color: #6b7280; }
+.text-muted { color: #6b7280; }
+</style>
+{% endblock %}

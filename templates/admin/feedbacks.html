@@ -1,0 +1,104 @@
+{% extends "admin/base.html" %}
+
+{% block title %}纠错反馈 - 刻印后台{% endblock %}
+
+{% block content %}
+<div class="admin-header">
+    <h1><i class="fas fa-bug"></i> 纠错反馈管理</h1>
+</div>
+
+<!-- 统计 -->
+<div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem;">
+    <div class="stat-card" style="background: #fff3cd; padding: 1rem; border-radius: 8px; text-align: center;">
+        <div style="font-size: 1.5rem; font-weight: 700;">{{ stats.get('pending', 0) }}</div>
+        <div style="font-size: 0.85rem; color: #666;">待处理</div>
+    </div>
+    <div class="stat-card" style="background: #d4edda; padding: 1rem; border-radius: 8px; text-align: center;">
+        <div style="font-size: 1.5rem; font-weight: 700;">{{ stats.get('resolved', 0) }}</div>
+        <div style="font-size: 0.85rem; color: #666;">已处理</div>
+    </div>
+    <div class="stat-card" style="background: #f8d7da; padding: 1rem; border-radius: 8px; text-align: center;">
+        <div style="font-size: 1.5rem; font-weight: 700;">{{ stats.get('dismissed', 0) }}</div>
+        <div style="font-size: 0.85rem; color: #666;">已忽略</div>
+    </div>
+</div>
+
+<!-- 筛选 -->
+<div style="background: white; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; display: flex; gap: 0.5rem; flex-wrap: wrap;">
+    <a href="{{ url_for('admin.admin_feedbacks', status='all') }}" class="btn btn-sm {% if status == 'all' %}btn-primary{% else %}btn-outline{% endif %}">全部</a>
+    <a href="{{ url_for('admin.admin_feedbacks', status='pending') }}" class="btn btn-sm {% if status == 'pending' %}btn-primary{% else %}btn-outline{% endif %}">待处理</a>
+    <a href="{{ url_for('admin.admin_feedbacks', status='resolved') }}" class="btn btn-sm {% if status == 'resolved' %}btn-primary{% else %}btn-outline{% endif %}">已处理</a>
+    <a href="{{ url_for('admin.admin_feedbacks', status='dismissed') }}" class="btn btn-sm {% if status == 'dismissed' %}btn-primary{% else %}btn-outline{% endif %}">已忽略</a>
+</div>
+
+<!-- 列表 -->
+<div style="background: white; border-radius: 8px; box-shadow: var(--box-shadow); overflow: hidden;">
+    <table class="table" style="width: 100%; border-collapse: collapse;">
+        <thead><tr style="background: var(--gray-100);">
+            <th style="padding: 0.75rem;">题目ID</th>
+            <th style="padding: 0.75rem;">科目</th>
+            <th style="padding: 0.75rem;">用户</th>
+            <th style="padding: 0.75rem;">反馈内容</th>
+            <th style="padding: 0.75rem;">状态</th>
+            <th style="padding: 0.75rem;">时间</th>
+            <th style="padding: 0.75rem;">操作</th>
+        </tr></thead>
+        <tbody>
+            {% for f in feedbacks %}
+            <tr style="border-bottom: 1px solid var(--gray-200);">
+                <td style="padding: 0.75rem; font-family: monospace; font-size: 0.85rem;">{{ f.question_id }}</td>
+                <td style="padding: 0.75rem;">{{ f.subject_name or '-' }}</td>
+                <td style="padding: 0.75rem;">{{ f.username }}</td>
+                <td style="padding: 0.75rem; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ f.content }}</td>
+                <td style="padding: 0.75rem;">
+                    {% if f.status == 'pending' %}<span class="badge badge-warning">待处理</span>
+                    {% elif f.status == 'resolved' %}<span class="badge badge-success">已处理</span>
+                    {% else %}<span class="badge badge-secondary">已忽略</span>
+                    {% endif %}
+                </td>
+                <td style="padding: 0.75rem; font-size: 0.8rem; color: #666;">{{ f.created_at[:16] }}</td>
+                <td style="padding: 0.75rem;">
+                    {% if f.status == 'pending' %}
+                    <form method="post" action="{{ url_for('admin.admin_resolve_feedback', fid=f.id) }}" style="display:inline;">
+                        <button class="btn btn-sm btn-success" onclick="return confirm('标记为已处理？')">✓</button>
+                    </form>
+                    <form method="post" action="{{ url_for('admin.admin_dismiss_feedback', fid=f.id) }}" style="display:inline;">
+                        <button class="btn btn-sm btn-warning" onclick="return confirm('忽略此反馈？')">✗</button>
+                    </form>
+                    {% endif %}
+                    <form method="post" action="{{ url_for('admin.admin_delete_feedback', fid=f.id) }}" style="display:inline;">
+                        <button class="btn btn-sm btn-danger" onclick="return confirm('确定删除？')">🗑</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            {% if not feedbacks %}
+            <tr><td colspan="7" style="padding: 2rem; text-align: center; color: #999;">暂无反馈</td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+<!-- 分页 -->
+{% if total_pages > 1 %}
+<div style="margin-top: 1rem; display: flex; justify-content: center; gap: 0.5rem;">
+    {% for p in range(1, total_pages + 1) %}
+        <a href="{{ url_for('admin.admin_feedbacks', page=p, status=status) }}" class="btn btn-sm {% if p == page %}btn-primary{% else %}btn-outline{% endif %}">{{ p }}</a>
+    {% endfor %}
+</div>
+{% endif %}
+
+<style>
+.badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; }
+.badge-success { background: #d4edda; color: #155724; }
+.badge-warning { background: #fff3cd; color: #856404; }
+.badge-secondary { background: #e2e3e5; color: #383d41; }
+.badge-danger { background: #f8d7da; color: #721c24; }
+.btn-sm { padding: 4px 8px; font-size: 0.8rem; border: none; border-radius: 4px; cursor: pointer; margin: 0 2px; }
+.btn-primary { background: #4a90d9; color: white; }
+.btn-outline { background: transparent; color: #4a90d9; border: 1px solid #4a90d9; }
+.btn-success { background: #28a745; color: white; }
+.btn-warning { background: #ffc107; color: #333; }
+.btn-danger { background: #dc3545; color: white; }
+</style>
+{% endblock %}

@@ -18,11 +18,22 @@ import tempfile
 logger = logging.getLogger(__name__)
 from flask import Blueprint, render_template, request, redirect, url_for, flash, session, jsonify
 from auth import admin_required, login_required
-from models import get_db
+from models import get_db, verify_session_token, sanitize_html
 from models import (
     update_question_id, health_check_questions, batch_delete_by_category,
     batch_move_questions, batch_update_questions, create_import_log,
     get_import_logs, delete_import_log,
+    authenticate_user, get_all_users, create_user, update_user_status,
+    get_all_subjects_admin, get_subject, create_subject, update_subject, delete_subject,
+    get_subject_stats,
+    get_categories_tree, get_leaf_categories, create_category, delete_category,
+    get_questions_by_subject, create_question, update_question, delete_question, get_question,
+    get_all_subjects_for_permission, get_user_permissions, set_user_subject_permission,
+    get_user_by_id, update_user_last_login, hash_password,
+    set_user_session_token, clear_user_session_token,
+    get_category, get_subject_by_id,
+
+    grant_user_license, revoke_user_license, get_all_licenses,
 )
 
 # ==================== apkg 导入工具函数 ====================
@@ -169,7 +180,7 @@ def _extract_apkg(apkg_path: str, subject_id: int):
     
     返回: {"imported": int, "errors": int, "images": list, "categories": list}
     """
-    from models import get_db, create_category, create_question
+    from models import get_db, create_category, create_staging_record, clear_staging_by_subject
     
     result = {"imported": 0, "errors": 0, "images": [], "categories": []}
     
@@ -393,25 +404,31 @@ def _extract_apkg(apkg_path: str, subject_id: int):
 
                 # 构造有意义的 ID: "1.2-01"
                 q_id = _generate_question_id(level3_name, stem)
+                
+                # 从题干提取编号前缀 (如 "01.", "13.") 作为 question_id
+                q_num = ""
+                num_match = re.match(r'^(\d+)[.、]\s*', stem)
+                if num_match:
+                    q_num = num_match.group(1)
 
-                # 写入数据库
-                qdata = {
-                    'id': q_id,
-                    'stem': stem,
-                    'options': json.dumps(options, ensure_ascii=False),
-                    'answer': answer,
-                    'explanation': explanation,
-                    'qtype': qtype,
-                    'qtype_text': qtype_text,
-                    'difficulty': '无',
+                # 写入 staging 确认库
+                sdata = {
+                    'question_id': q_num,
                     'subject_id': subject_id,
                     'category_id': level3_id,
-                    'is_real_exam': 0,
-                    'exam_year': None,
-                    'source': 'practice',
+                    'category_name': level3_name,
+                    'stem': stem,
+                    'option_a': options.get('A', ''),
+                    'option_b': options.get('B', ''),
+                    'option_c': options.get('C', ''),
+                    'option_d': options.get('D', ''),
+                    'option_e': options.get('E', ''),
+                    'option_f': options.get('F', ''),
+                    'correct_answer': answer,
+                    'explanation': explanation,
                 }
 
-                create_question(qdata)
+                create_staging_record(sdata)
                 result["imported"] += 1
                 
             except Exception as e:
@@ -424,17 +441,6 @@ def _extract_apkg(apkg_path: str, subject_id: int):
         shutil.rmtree(work_dir, ignore_errors=True)
     
     return result
-from models import (
-    authenticate_user, get_all_users, create_user, update_user_status,
-    get_all_subjects_admin, get_subject, create_subject, update_subject,
-    get_categories_tree, get_leaf_categories, create_category, delete_category,
-    get_questions_by_subject, create_question, update_question, delete_question, get_question,
-    get_all_subjects_for_permission, get_user_permissions, set_user_subject_permission,
-    get_user_by_id, update_user_last_login, hash_password,
-    set_user_session_token, clear_user_session_token,
-    # 新增
-    get_category, get_subject_by_id,
-)
 
 admin_bp = Blueprint('admin', __name__, url_prefix='/admin')
 
@@ -448,6 +454,10 @@ def login():
         password = request.form.get('password', '')
         user = authenticate_user(username, password)
         if user and user['role'] == 'admin':
+            # 清除旧 session 数据
+            session.pop('practice', None)
+            session.pop('chapter_progress', None)
+            session.pop('reinforce', None)
             import secrets
             token = secrets.token_hex(32)
             session['user_id'] = user['id']
@@ -481,6 +491,9 @@ def check_admin():
     if request.endpoint == 'admin.login':
         return
     if 'user_id' not in session or session.get('role') != 'admin':
+        return redirect(url_for('admin.login'))
+    if not verify_session_token(session['user_id'], session.get('session_token')):
+        session.clear()
         return redirect(url_for('admin.login'))
 
 
@@ -564,12 +577,58 @@ def reset_password(user_id):
     return redirect(url_for('admin.users'))
 
 
+# ==================== 授权管理 ====================
+
+@admin_bp.route('/licenses')
+def licenses():
+    """授权管理页面"""
+    all_licenses = get_all_licenses()
+    all_users = get_all_users()
+    all_subjects = get_all_subjects_admin()
+    return render_template('admin/licenses.html', 
+                          licenses=all_licenses, 
+                          users=all_users, 
+                          subjects=all_subjects)
+
+
+@admin_bp.route('/licenses/grant', methods=['POST'])
+def grant_license():
+    """授予/延长授权"""
+    user_id = request.form.get('user_id', type=int)
+    subject_id = request.form.get('subject_id', type=int)
+    days = request.form.get('days', type=int, default=365)
+    
+    if not user_id or not subject_id:
+        flash('用户和科目不能为空', 'error')
+        return redirect(url_for('admin.licenses'))
+    
+    grant_user_license(user_id, subject_id, days)
+    flash(f'已授予用户 {user_id} 科目 {subject_id} {days} 天授权', 'success')
+    return redirect(url_for('admin.licenses'))
+
+
+@admin_bp.route('/licenses/revoke/<int:license_id>', methods=['POST'])
+def revoke_license(license_id):
+    """吊销授权"""
+    from models import get_db
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT user_id, subject_id FROM user_licenses WHERE id = ?", (license_id,))
+    row = cur.fetchone()
+    if row:
+        revoke_user_license(row[0], row[1])
+        flash(f'已吊销用户 {row[0]} 科目 {row[1]} 的授权', 'success')
+    conn.close()
+    return redirect(url_for('admin.licenses'))
+
+
 # ==================== 科目管理 ====================
 
 @admin_bp.route('/subjects')
 def subjects():
     all_subjects = get_all_subjects_admin()
-    return render_template('admin/subjects.html', subjects=all_subjects)
+    stats = {s['id']: get_subject_stats(s['id']) for s in all_subjects}
+    return render_template('admin/subjects.html', subjects=all_subjects, stats=stats)
 
 
 @admin_bp.route('/subjects/create', methods=['GET', 'POST'])
@@ -598,6 +657,44 @@ def toggle_subject(subject_id):
         new_status = 0 if subject['status'] == 1 else 1
         update_subject(subject_id, status=new_status)
         flash(f'科目 {subject["name"]} 已{"启用" if new_status else "禁用"}', 'success')
+    return redirect(url_for('admin.subjects'))
+
+
+@admin_bp.route('/subjects/<int:subject_id>/edit', methods=['GET', 'POST'])
+def edit_subject_page(subject_id):
+    subject = get_subject(subject_id)
+    if not subject:
+        flash('科目不存在', 'error')
+        return redirect(url_for('admin.subjects'))
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        code = request.form.get('code', '').strip()
+        description = request.form.get('description', '')
+        icon = request.form.get('icon', '📚')
+        if not name or not code:
+            flash('名称和代码不能为空', 'error')
+            return redirect(url_for('admin.edit_subject_page', subject_id=subject_id))
+        import re
+        if not re.match(r'^[a-zA-Z0-9_]+$', code):
+            flash('代码只能包含字母、数字和下划线', 'error')
+            return redirect(url_for('admin.edit_subject_page', subject_id=subject_id))
+        result = update_subject(subject_id, name=name, code=code, description=description, icon=icon)
+        flash(f'科目 {name} 更新成功', 'success')
+        return redirect(url_for('admin.subjects'))
+    return render_template('admin/subject_edit.html', subject=subject)
+
+
+@admin_bp.route('/subjects/<int:subject_id>/delete', methods=['POST'])
+def delete_subject_page(subject_id):
+    subject = get_subject(subject_id)
+    if not subject:
+        flash('科目不存在', 'error')
+        return redirect(url_for('admin.subjects'))
+    ok, err = delete_subject(subject_id)
+    if ok:
+        flash(f'科目 {subject["name"]} 已删除', 'success')
+    else:
+        flash(f'无法删除：{err}', 'error')
     return redirect(url_for('admin.subjects'))
 
 
@@ -648,12 +745,14 @@ def questions():
     subject_id = request.args.get('subject_id', 1, type=int)
     page = request.args.get('page', 1, type=int)
     search = request.args.get('search', '')
+    category_id = request.args.get('category_id', 0, type=int)
     per_page = 20
     
-    questions, total = get_questions_by_subject(subject_id, page=page, per_page=per_page, search=search)
+    questions, total = get_questions_by_subject(subject_id, page=page, per_page=per_page, search=search, category_id=category_id or None)
     total_pages = (total + per_page - 1) // per_page
     
     subjects = get_all_subjects_for_permission()
+    categories = get_leaf_categories(subject_id)
     
     return render_template('admin/questions.html',
                           questions=questions,
@@ -662,7 +761,9 @@ def questions():
                           total=total,
                           search=search,
                           subject_id=subject_id,
-                          subjects=subjects)
+                          category_id=category_id,
+                          subjects=subjects,
+                          categories=categories)
 
 
 @admin_bp.route('/questions/create', methods=['GET', 'POST'])
@@ -924,7 +1025,7 @@ def import_apkg():
         if result['errors'] > 0 and result['imported'] == 0:
             flash(f'导入失败：{result["errors"]} 条错误', 'error')
         else:
-            msg = f'导入完成：成功 {result["imported"]} 条'
+            msg = f'已放入确认库：{result["imported"]} 条待确认'
             if result['errors']:
                 msg += f'，失败 {result["errors"]} 条'
             if result['images']:
@@ -933,9 +1034,233 @@ def import_apkg():
                 msg += f'，新建分类：{"、".join(result["categories"])}'
             flash(msg, 'success')
         
-        return redirect(url_for('admin.questions', subject_id=subject_id))
+        return redirect(url_for('admin.import_staging', subject_id=subject_id))
     
     return render_template('admin/import_apkg.html', subjects=subjects)
+
+
+# ==================== 导入确认库 (Staging) ====================
+
+@admin_bp.route('/import-staging')
+def import_staging():
+    """导入确认库列表页"""
+    from models import get_staging_subject_counts
+    staging_counts = get_staging_subject_counts()
+    return render_template('admin/import_staging.html',
+                          staging_counts=staging_counts,
+                          subjects=get_all_subjects_for_permission())
+
+
+@admin_bp.route('/import-staging/<int:subject_id>')
+def import_staging_detail(subject_id):
+    """某科目的 staging 详情"""
+    from models import get_staging_by_subject
+    page = request.args.get('page', 1, type=int)
+    search = request.args.get('search', '')
+    staging, total = get_staging_by_subject(subject_id, page, page_size=20, search=search)
+    
+    # 获取该科目的所有分类供选择
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, level, parent_id FROM categories WHERE subject_id = ? ORDER BY level, id", (subject_id,))
+    categories = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    
+    total_pages = (total + 19) // 20
+    
+    return render_template('admin/import_staging_detail.html',
+                          staging=staging,
+                          categories=categories,
+                          subject_id=subject_id,
+                          page=page,
+                          total_pages=total_pages,
+                          total=total,
+                          search=search)
+
+
+@admin_bp.route('/import-staging/<int:subject_id>/confirm-all', methods=['POST'])
+def import_staging_confirm_all(subject_id):
+    """将 staging 全部导入正式题库（批量单事务，避免数据库锁竞争）"""
+    from models import get_db, get_staging_by_subject, clear_staging_by_subject, get_subject_by_id, create_import_log
+    from datetime import datetime
+    import uuid
+    
+    staging, total = get_staging_by_subject(subject_id, page=1, page_size=10000)
+    
+    # 批量收集 INSERT 数据
+    rows = []
+    for item in staging:
+        try:
+            options = []
+            for key in ['option_a', 'option_b', 'option_c', 'option_d', 'option_e', 'option_f']:
+                if item.get(key):
+                    options.append(sanitize_html(item[key]))
+            
+            q_id = ''
+            cat_name = item.get('category_name', '')
+            stem = item.get('stem', '')
+            category_id = item.get('category_id')
+            
+            # 防御：先按 stem 检查同一分类是否已存在题目（防止重复导入生成UUID垃圾数据）
+            if stem and category_id:
+                conn = get_db()
+                cur = conn.cursor()
+                cur.execute("SELECT id FROM questions WHERE stem = ? AND category_id = ?", (stem, category_id))
+                existing = cur.fetchone()
+                conn.close()
+                if existing:
+                    logger.debug(f"题目已存在，跳过: {existing['id']} stem={stem[:20]}...")
+                    continue  # 跳过重复题目
+            
+            # 优先使用 _generate_question_id 从分类名提取前缀拼接 (如 3.1-01)
+            if cat_name and stem:
+                q_id = _generate_question_id(cat_name, stem)
+            # 回退：旧格式 subject_id.question_id → 改为从分类名提取前缀
+            if not q_id and item.get('question_id') and cat_name:
+                import re
+                cat_match = re.match(r'^(\d+\.\d+)', cat_name)
+                if cat_match:
+                    q_id = f"{cat_match.group(1)}-{item['question_id']}"
+            # 最终回退：UUID（理论上不应该到达这里）
+            if not q_id:
+                q_id = str(uuid.uuid4())[:8]
+            
+            answer = item.get('correct_answer', '').upper()
+            qtype = 'multiple' if len(answer) > 1 else 'single'
+            qtype_text = '多选题' if qtype == 'multiple' else '单选题'
+            
+            rows.append((
+                q_id,
+                sanitize_html(item['stem']),
+                json.dumps(options, ensure_ascii=False),
+                answer,
+                sanitize_html(item.get('explanation', '')),
+                qtype,
+                '无',
+                subject_id,
+                item.get('category_id'),
+                0,
+                None,
+                'practice',
+                qtype_text,
+            ))
+        except Exception as e:
+            logger.debug(f"导入 staging 记录 {item['id']} 失败: {e}")
+            continue
+    
+    # 单事务批量 INSERT
+    imported = 0
+    errors = 0
+    if rows:
+        conn = get_db()
+        cur = conn.cursor()
+        try:
+            cur.executemany("""
+                INSERT INTO questions (
+                    id, stem, options, answer, explanation, qtype, difficulty,
+                    subject_id, category_id, is_real_exam, exam_year, source, qtype_text, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+            """, rows)
+            conn.commit()
+            imported = len(rows)
+        except Exception as e:
+            logger.error(f"批量导入题目失败: {e}")
+            errors = len(rows)
+            conn.rollback()
+        finally:
+            conn.close()
+    
+    # 清空 staging（clear_staging_by_subject 自带重试）
+    clear_staging_by_subject(subject_id)
+    
+    status = 'failed' if imported == 0 else ('partial' if errors else 'success')
+    subject = get_subject_by_id(subject_id)
+    create_import_log({
+        'operator': session.get('username', 'admin'),
+        'file_name': f'确认库导入 (科目{subject_id})',
+        'file_type': 'staging',
+        'subject_id': subject_id,
+        'subject_name': subject['name'] if subject else '',
+        'imported': imported,
+        'errors': errors,
+        'status': status,
+    })
+    
+    if imported == 0:
+        flash(f'确认库导入失败：{errors} 条错误', 'error')
+    else:
+        msg = f'确认库导入完成：成功 {imported} 条'
+        if errors:
+            msg += f'，失败 {errors} 条'
+        flash(msg, 'success')
+    
+    return redirect(url_for('admin.questions', subject_id=subject_id))
+
+
+@admin_bp.route('/import-staging/<int:subject_id>/clear', methods=['POST'])
+def import_staging_clear(subject_id):
+    """清空某科目的 staging"""
+    from models import clear_staging_by_subject
+    count = clear_staging_by_subject(subject_id)
+    flash(f'已清空 {count} 条待确认题目', 'info')
+    return redirect(url_for('admin.import_staging'))
+
+
+@admin_bp.route('/import-staging/<int:staging_id>/edit', methods=['GET', 'POST'])
+def import_staging_edit(staging_id):
+    """编辑 staging 单条记录"""
+    from models import get_staging_record, update_staging_record
+    
+    if request.method == 'POST':
+        data = {
+            'question_id': request.form.get('question_id', '').strip(),
+            'subject_id': request.form.get('subject_id', type=int),
+            'category_id': request.form.get('category_id', type=int) or None,
+            'category_name': request.form.get('category_name', '').strip(),
+            'stem': request.form.get('stem', '').strip(),
+            'option_a': request.form.get('option_a', '').strip(),
+            'option_b': request.form.get('option_b', '').strip(),
+            'option_c': request.form.get('option_c', '').strip(),
+            'option_d': request.form.get('option_d', '').strip(),
+            'option_e': request.form.get('option_e', '').strip(),
+            'option_f': request.form.get('option_f', '').strip(),
+            'correct_answer': request.form.get('correct_answer', '').strip().upper(),
+            'explanation': request.form.get('explanation', '').strip(),
+        }
+        update_staging_record(staging_id, data)
+        subject_id = data['subject_id']
+        flash('题目已更新', 'success')
+        return redirect(url_for('admin.import_staging_detail', subject_id=subject_id))
+    
+    record = get_staging_record(staging_id)
+    if not record:
+        flash('记录不存在', 'error')
+        return redirect(url_for('admin.import_staging'))
+    
+    # 获取分类
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, level, parent_id FROM categories WHERE subject_id = ? ORDER BY level, id", (record['subject_id'],))
+    categories = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    
+    return render_template('admin/import_staging_edit.html',
+                          record=record,
+                          categories=categories)
+
+
+@admin_bp.route('/import-staging/<int:staging_id>/delete', methods=['POST'])
+def import_staging_delete(staging_id):
+    """删除 staging 单条记录"""
+    from models import get_staging_record, delete_staging_record
+    record = get_staging_record(staging_id)
+    if record:
+        subject_id = record['subject_id']
+        delete_staging_record(staging_id)
+        flash('已删除', 'info')
+        return redirect(url_for('admin.import_staging_detail', subject_id=subject_id))
+    flash('记录不存在', 'error')
+    return redirect(url_for('admin.import_staging'))
 
 
 # ==================== 数据健康检查 ====================
@@ -1056,78 +1381,313 @@ def delete_import_log_page(log_id):
     return redirect(url_for('admin.import_logs_page'))
 
 
-# ==================== 每日学习上限管理 ====================
-
-from models import get_study_limits, set_study_limits, get_daily_study_count
 
 
-@admin_bp.route('/study-limits')
+# ==================== 邀请码管理 ====================
+
+from models import (
+    generate_invitation_code, create_invitation_code, get_invitation_code,
+    list_invitation_codes, disable_invitation_code, delete_invitation_code,
+    get_code_usage_logs, get_subject_by_id, hash_password,
+    reset_user_password, get_user_by_id, get_all_subjects_admin,
+)
+from datetime import datetime, timedelta
+
+
+@admin_bp.route('/codes')
 @admin_required
-def study_limits_page():
-    """每日学习上限管理页面"""
-    from models import get_db, get_subjects, get_users
+def admin_codes():
+    """邀请码列表"""
+    page = request.args.get('page', 1, type=int)
+    subject_id = request.args.get('subject_id', type=int)
+    status = request.args.get('status', 'all')
     
-    subjects = get_subjects()
-    users = get_users()
+    codes, total = list_invitation_codes(page=page, subject_id=subject_id, status=status)
+    total_pages = max(1, (total + 20 - 1) // 20)
     
-    # 获取所有已配置的上限
+    subjects = get_all_subjects_admin()
+    
+    return render_template('admin/codes.html', codes=codes, page=page,
+                          total_pages=total_pages, total=total,
+                          subjects=subjects, current_subject=subject_id,
+                          current_status=status,
+                          current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+
+
+@admin_bp.route('/codes/generate', methods=['POST'])
+@admin_required
+def admin_codes_generate():
+    """批量生成邀请码"""
+    subject_id = request.form.get('subject_id', type=int)
+    days = request.form.get('days', 365, type=int)
+    max_uses = request.form.get('max_uses', 1, type=int)
+    count = request.form.get('count', 1, type=int)
+    expires_days = request.form.get('expires_days', type=int)  # None = 永不过期
+    
+    if not subject_id:
+        flash('请选择科目', 'error')
+        return redirect(url_for('admin.admin_codes'))
+    
+    subject = get_subject_by_id(subject_id)
+    if not subject:
+        flash('科目不存在', 'error')
+        return redirect(url_for('admin.admin_codes'))
+    
+    if count < 1 or count > 100:
+        flash('生成数量必须在 1-100 之间', 'error')
+        return redirect(url_for('admin.admin_codes'))
+    
+    expires_at = None
+    if expires_days and expires_days > 0:
+        expires_at = (datetime.now() + timedelta(days=expires_days)).strftime('%Y-%m-%d %H:%M:%S')
+    
+    max_uses_val = max_uses if max_uses > 0 else None
+    created_by = session.get('user_id')
+    
+    generated = []
+    for _ in range(count):
+        code = generate_invitation_code()
+        cid = create_invitation_code(code, subject_id, days, max_uses_val, expires_at, created_by)
+        if cid:
+            generated.append(code)
+        else:
+            # 如果重复则重试（极少发生）
+            for _ in range(5):
+                code = generate_invitation_code()
+                cid = create_invitation_code(code, subject_id, days, max_uses_val, expires_at, created_by)
+                if cid:
+                    generated.append(code)
+                    break
+    
+    if generated:
+        flash(f'成功生成 {len(generated)} 个邀请码', 'success')
+    else:
+        flash('生成失败，请重试', 'error')
+    
+    # 返回 JSON 以便前端显示
+    if request.headers.get('Accept') == 'application/json':
+        return jsonify({
+            'success': True,
+            'codes': generated,
+            'subject': subject['name'],
+            'days': days,
+        })
+    
+    return redirect(url_for('admin.admin_codes'))
+
+
+@admin_bp.route('/codes/<int:code_id>/disable', methods=['POST'])
+@admin_required
+def admin_codes_disable(code_id):
+    """禁用邀请码"""
+    disable_invitation_code(code_id)
+    flash('邀请码已禁用', 'success')
+    return redirect(url_for('admin.admin_codes'))
+
+
+@admin_bp.route('/codes/<int:code_id>/delete', methods=['POST'])
+@admin_required
+def admin_codes_delete(code_id):
+    """删除邀请码"""
+    delete_invitation_code(code_id)
+    flash('邀请码已删除', 'success')
+    return redirect(url_for('admin.admin_codes'))
+
+
+@admin_bp.route('/codes/<int:code_id>/logs')
+@admin_required
+def admin_code_logs(code_id):
+    """查看邀请码使用记录"""
+    logs = get_code_usage_logs(code_id)
+    code = get_invitation_code(code_id)
+    # 通过 code_id 获取
+    from models import list_invitation_codes
+    codes, _ = list_invitation_codes(page=1, per_page=1000)
+    for c in codes:
+        if c['id'] == code_id:
+            code = c
+            break
+    
+    return render_template('admin/code_logs.html', logs=logs, code=code)
+
+
+# ==================== 管理员重置用户密码 ====================
+
+@admin_bp.route('/users/<int:user_id>/reset-password', methods=['POST'])
+@admin_required
+def admin_reset_user_password(user_id):
+    """管理员重置用户密码"""
+    user = get_user_by_id(user_id)
+    if not user:
+        flash('用户不存在', 'error')
+        return redirect(url_for('admin.users'))
+    
+    # 生成随机密码
+    import secrets
+    import string
+    new_password = ''.join(secrets.choice(string.ascii_letters + string.digits) for _ in range(10))
+    reset_user_password(user_id, new_password)
+    
+    flash(f'用户 {user["username"]} 的密码已重置为: {new_password}', 'success')
+    return redirect(url_for('admin.users'))
+
+
+# ==================== 站点设置 ====================
+
+from models import get_all_site_settings, batch_update_site_settings
+
+
+@admin_bp.route('/settings')
+@admin_required
+def admin_settings():
+    """站点设置页面"""
+    settings = get_all_site_settings()
+    return render_template('admin/settings.html', settings=settings)
+
+
+@admin_bp.route('/settings/save', methods=['POST'])
+@admin_required
+def admin_settings_save():
+    """保存站点设置"""
+    settings = {}
+    for key, value in request.form.items():
+        if key.startswith('setting_'):
+            settings[key[8:]] = value.strip()
+    batch_update_site_settings(settings)
+    flash('设置已保存', 'success')
+    return redirect(url_for('admin.admin_settings'))
+
+
+# ==================== 题目互动管理 ====================
+
+from models import (
+    list_feedbacks, resolve_feedback, dismiss_feedback, delete_feedback,
+    list_comments, admin_delete_comment, get_feedback_stats, get_comment_stats,
+)
+
+
+@admin_bp.route('/feedbacks')
+@admin_required
+def admin_feedbacks():
+    """纠错反馈管理"""
+    page = request.args.get('page', 1, type=int)
+    status = request.args.get('status', 'all')
+    subject_id = request.args.get('subject_id', type=int)
+    
+    feedbacks, total = list_feedbacks(subject_id=subject_id, status=status, page=page)
+    total_pages = max(1, (total + 20 - 1) // 20)
+    stats = get_feedback_stats()
+    
+    subjects = get_all_subjects_admin()
+    return render_template('admin/feedbacks.html', feedbacks=feedbacks,
+                          page=page, total_pages=total_pages, total=total,
+                          status=status, subjects=subjects, stats=stats)
+
+
+@admin_bp.route('/feedbacks/<int:fid>/resolve', methods=['POST'])
+@admin_required
+def admin_resolve_feedback(fid):
+    resolve_feedback(fid, session.get('user_id'))
+    flash('已标记为已处理', 'success')
+    return redirect(url_for('admin.admin_feedbacks'))
+
+
+@admin_bp.route('/feedbacks/<int:fid>/dismiss', methods=['POST'])
+@admin_required
+def admin_dismiss_feedback(fid):
+    dismiss_feedback(fid)
+    flash('已忽略', 'success')
+    return redirect(url_for('admin.admin_feedbacks'))
+
+
+@admin_bp.route('/feedbacks/<int:fid>/delete', methods=['POST'])
+@admin_required
+def admin_delete_feedback(fid):
+    delete_feedback(fid)
+    flash('已删除', 'success')
+    return redirect(url_for('admin.admin_feedbacks'))
+
+
+@admin_bp.route('/comments-manage')
+@admin_required
+def admin_comments():
+    """留言管理"""
+    page = request.args.get('page', 1, type=int)
+    subject_id = request.args.get('subject_id', type=int)
+    
+    comments, total = list_comments(subject_id=subject_id, page=page)
+    total_pages = max(1, (total + 20 - 1) // 20)
+    stats = get_comment_stats()
+    
+    subjects = get_all_subjects_admin()
+    return render_template('admin/comments.html', comments=comments,
+                          page=page, total_pages=total_pages, total=total,
+                          subjects=subjects, stats=stats)
+
+
+@admin_bp.route('/comments-manage/<int:cid>/delete', methods=['POST'])
+@admin_required
+def admin_delete_comment_page(cid):
+    admin_delete_comment(cid)
+    flash('已删除', 'success')
+    return redirect(url_for('admin.admin_comments'))
+
+
+# ==================== 笔记管理 ====================
+
+from models import get_db
+
+
+@admin_bp.route('/notes')
+@admin_required
+def admin_notes():
+    """笔记管理"""
+    page = request.args.get('page', 1, type=int)
+    subject_id = request.args.get('subject_id', type=int)
+    
     conn = get_db()
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("""
-        SELECT sl.user_id, sl.subject_id, sl.daily_new_limit, sl.daily_review_limit, sl.desired_retention, sl.max_interval, sl.learning_steps,
-               u.username, s.name as subject_name
-        FROM study_limits sl
-        JOIN users u ON u.id = sl.user_id
-        JOIN subjects s ON s.id = sl.subject_id
-        ORDER BY u.username, s.name
-    """)
-    configs = [dict(r) for r in cur.fetchall()]
+    
+    where = "1=1"
+    params = []
+    if subject_id:
+        where += ' AND n.subject_id = ?'
+        params.append(subject_id)
+    
+    cur.execute(f"SELECT COUNT(*) FROM question_notes n WHERE {where}", params)
+    total = cur.fetchone()[0]
+    
+    offset = (page - 1) * 20
+    cur.execute(
+        f"""SELECT n.*, u.username, s.name as subject_name
+            FROM question_notes n
+            LEFT JOIN users u ON u.id = n.user_id
+            LEFT JOIN subjects s ON s.id = n.subject_id
+            WHERE {where}
+            ORDER BY n.updated_at DESC
+            LIMIT 20 OFFSET ?""",
+        params + [offset]
+    )
+    notes = [dict(r) for r in cur.fetchall()]
     conn.close()
     
-    return render_template('admin/study_limits.html', subjects=subjects, users=users, configs=configs)
+    total_pages = max(1, (total + 20 - 1) // 20)
+    subjects = get_all_subjects_admin()
+    
+    return render_template('admin/notes.html', notes=notes,
+                          page=page, total_pages=total_pages, total=total,
+                          subjects=subjects, current_subject=subject_id)
 
 
-@admin_bp.route('/study-limits/set', methods=['POST'])
+@admin_bp.route('/notes/<int:nid>/delete', methods=['POST'])
 @admin_required
-def set_study_limits_api():
-    """设置每日学习上限"""
-    user_id = request.form.get('user_id', type=int)
-    subject_id = request.form.get('subject_id', type=int)
-    daily_new_limit = request.form.get('daily_new_limit', type=int)
-    daily_review_limit = request.form.get('daily_review_limit', type=int)
-    desired_retention = request.form.get('desired_retention', type=float)
-    max_interval = request.form.get('max_interval', type=int)
-    learning_steps_raw = request.form.get('learning_steps')
-    
-    learning_steps = None
-    if learning_steps_raw:
-        try:
-            learning_steps = [int(x.strip()) for x in learning_steps_raw.split(',')]
-        except (ValueError, TypeError):
-            pass
-    
-    if not user_id or not subject_id:
-        flash('请选择用户和科目', 'error')
-        return redirect(url_for('admin.study_limits_page'))
-    
-    result = set_study_limits(user_id, subject_id, daily_new_limit, daily_review_limit, desired_retention, max_interval, learning_steps)
-    ls_str = ','.join(str(x) for x in result['learning_steps'])
-    flash(f'已设置: 新题 {result["daily_new_limit"]}/天, 复习 {result["daily_review_limit"]}/天, DR={result["desired_retention"]:.0%}, 最大间隔={result["max_interval"]}天, 学习步骤=[{ls_str}]min', 'success')
-    return redirect(url_for('admin.study_limits_page'))
-
-
-@admin_bp.route('/study-limits/<int:user_id>/<int:subject_id>/today')
-@admin_required
-def study_limits_today(user_id, subject_id):
-    """查看用户今日学习进度"""
-    from models import get_users, get_subject_by_id
-    
-    user = get_users().get(user_id) if get_users() else None
-    subject = get_subject_by_id(subject_id)
-    limits = get_study_limits(user_id, subject_id)
-    count = get_daily_study_count(user_id, subject_id)
-    
-    return render_template('admin/study_limits_today.html',
-                          user_id=user_id, subject_id=subject_id,
-                          user=user, subject=subject,
-                          limits=limits, count=count)
+def admin_delete_note(nid):
+    """删除笔记"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM question_notes WHERE id = ?", (nid,))
+    conn.commit()
+    conn.close()
+    flash('已删除', 'success')
+    return redirect(url_for('admin.admin_notes'))

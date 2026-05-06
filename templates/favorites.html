@@ -16,7 +16,7 @@
                 {% for f in favorites %}
                 <tr>
                     <td>{{ f.question_id }}</td>
-                    <td><a href="{{ url_for('show_question', subject_id=subject.id, qid=f.question_id) }}">{{ f.stem }}</a></td>
+                    <td><a href="{{ url_for('show_question', subject_id=subject.id, qid=f.question_id) }}">{{ f.stem | striptags | truncate(60) }}</a></td>
                     <td>
                         <form method="post" action="{{ url_for('favorite_question', subject_id=subject.id, qid=f.question_id) }}" class="d-inline">
                             <button type="submit" class="btn btn-danger btn-sm">取消收藏</button>

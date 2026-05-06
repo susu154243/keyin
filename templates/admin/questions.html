@@ -16,9 +16,16 @@
 <div class="card mb-3">
     <form method="get" class="d-flex gap-2">
         <input type="hidden" name="subject_id" value="{{ subject_id }}">
+        <input type="hidden" name="page" value="1">
+        <select name="category_id" class="form-control" style="width: 200px;">
+            <option value="0">全部分类</option>
+            {% for c in categories %}
+            <option value="{{ c.id }}" {% if c.id == category_id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+        </select>
         <input type="text" name="search" value="{{ search }}" class="form-control" placeholder="搜索题干或题号...">
         <button type="submit" class="btn btn-primary"><i class="fas fa-search"></i> 搜索</button>
-        {% if search %}<a href="?subject_id={{ subject_id }}" class="btn btn-outline-secondary">清除</a>{% endif %}
+        {% if search or category_id %}<a href="?subject_id={{ subject_id }}" class="btn btn-outline-secondary">清除</a>{% endif %}
     </form>
 </div>
 
@@ -51,7 +58,7 @@
     {% if total_pages > 1 %}
     <div class="d-flex justify-content-center mt-3">
         {% for p in range(1, total_pages + 1) %}
-        <a href="?subject_id={{ subject_id }}&page={{ p }}&search={{ search }}" class="btn btn-sm {% if p == page %}btn-primary{% else %}btn-outline-primary{% endif %}" style="margin: 0 0.25rem;">{{ p }}</a>
+        <a href="?subject_id={{ subject_id }}&page={{ p }}&search={{ search }}&category_id={{ category_id }}" class="btn btn-sm {% if p == page %}btn-primary{% else %}btn-outline-primary{% endif %}" style="margin: 0 0.25rem;">{{ p }}</a>
         {% endfor %}
     </div>
     {% endif %}

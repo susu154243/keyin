@@ -31,7 +31,7 @@
                 {% for r in results %}
                     <li class="mb-2">
                         <a href="{{ url_for('show_question', qid=r.id) }}" class="text-primary">
-                            <span class="badge badge-primary">{{ r.id }}</span> {{ r.stem }}
+                            <span class="badge badge-primary">{{ r.id }}</span> {{ r.stem | striptags | truncate(80) }}
                         </a>
                     </li>
                 {% endfor %}

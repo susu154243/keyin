@@ -8,32 +8,67 @@
         <div class="app-logo mb-3">
             <i class="fas fa-book-open" style="font-size: 3.5rem; color: var(--primary-color);"></i>
         </div>
-        <h1 class="display-title mb-3">欢迎使用 <span class="text-primary">刻印</span></h1>
-        <p class="lead mb-3">高效的在线刷题系统，助力学习提升</p>
+        <h1 class="display-title mb-3">{{ welcome_title | safe }}</h1>
+        <p class="lead mb-3">{{ welcome_subtitle }}</p>
     </div>
 </div>
 
 {% if subjects %}
 <div class="features-section mb-4">
     <h2 class="card-title mb-3"><i class="fas fa-layer-group"></i> 我的科目</h2>
-    <div class="card-grid">
-        {% for subject in subjects %}
-        <div class="card feature-card">
-            <div class="feature-icon">
-                <span style="font-size: 2rem;">{{ subject.icon }}</span>
-            </div>
-            <h3 class="card-title">{{ subject.name }}</h3>
-            <p class="card-text">{{ subject.description }}</p>
-            <div class="mt-auto">
-                <a href="{{ url_for('subject_detail', subject_id=subject.id) }}" class="btn btn-primary btn-block">
-                    <i class="fas fa-arrow-right"></i> 进入学习
-                </a>
-            </div>
+
+    <!-- 已获得授权 -->
+    <div class="level-section">
+        <h3 class="level-title level-title-authorized"><i class="fas fa-check-circle"></i> 已获得授权</h3>
+        <div class="card-grid">
+            {% for subject in subjects %}
+            {% include 'index_subject_card.html' %}
+            {% endfor %}
         </div>
-        {% endfor %}
     </div>
 </div>
-{% else %}
+{% endif %}
+
+{% if advanced %}
+<div class="features-section mb-4">
+    <div class="level-section">
+        <h3 class="level-title level-title-advanced"><i class="fas fa-crown"></i> 高级</h3>
+        <div class="card-grid">
+            {% for subject in advanced %}
+            {% include 'index_subject_card.html' %}
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if intermediate %}
+<div class="features-section mb-4">
+    <div class="level-section">
+        <h3 class="level-title level-title-intermediate"><i class="fas fa-medal"></i> 中级</h3>
+        <div class="card-grid">
+            {% for subject in intermediate %}
+            {% include 'index_subject_card.html' %}
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if primary %}
+<div class="features-section mb-4">
+    <div class="level-section">
+        <h3 class="level-title level-title-primary"><i class="fas fa-star"></i> 初级</h3>
+        <div class="card-grid">
+            {% for subject in primary %}
+            {% include 'index_subject_card.html' %}
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% if not subjects and not advanced and not intermediate and not primary %}
 <div class="card text-center py-5">
     <i class="fas fa-exclamation-circle" style="font-size: 3rem; color: var(--warning-color); margin-bottom: 1rem;"></i>
     <h2 class="mb-3">暂无可用科目</h2>
@@ -47,5 +82,27 @@
     .feature-card { display: flex; flex-direction: column; height: 100%; text-align: center; }
     .feature-icon { width: 4rem; height: 4rem; background-color: rgba(67, 97, 238, 0.1); border-radius: 50%; display: flex; justify-content: center; align-items: center; margin: 0 auto 1rem; }
     .card-text { color: var(--gray-600); margin-bottom: 1.5rem; }
+    .license-status { margin-top: 0.75rem; font-size: 0.85rem; font-weight: 500; }
+    .license-status i { margin-right: 0.25rem; }
+    .license-ok { color: #22c55e; }
+    .license-warning { color: #f59e0b; }
+    .license-expired { color: #ef4444; }
+    .subject-locked { opacity: 0.55; filter: grayscale(40%); }
+    .subject-locked .feature-icon { background-color: rgba(128,128,128,0.15); }
+    .btn-locked { background-color: #9ca3af; color: #fff; cursor: not-allowed; pointer-events: none; }
+    .level-section { margin-bottom: 1.5rem; }
+    .level-title {
+        font-size: 1.1rem;
+        font-weight: 600;
+        padding: 0.5rem 0;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+    .level-title-authorized { color: #22c55e; border-bottom: 2px solid #22c55e; }
+    .level-title-advanced { color: #8b5cf6; border-bottom: 2px solid #8b5cf6; }
+    .level-title-intermediate { color: #f59e0b; border-bottom: 2px solid #f59e0b; }
+    .level-title-primary { color: #3b82f6; border-bottom: 2px solid #3b82f6; }
 </style>
 {% endblock %}

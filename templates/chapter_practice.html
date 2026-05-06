@@ -22,6 +22,9 @@
         <div class="question-block">
             <div class="q-header">
                 <span class="q-number">第 {{ queue_position }} 题</span>
+                {% if is_reinforce %}
+                <span class="badge bg-danger"><i class="fas fa-fire"></i> 强化</span>
+                {% endif %}
                 {% if retry_count > 0 %}
                 <!-- P1-5: 重做题标识 -->
                 <span class="badge bg-warning"><i class="fas fa-redo-alt"></i> 第{{ retry_count + 1 }}次作答</span>
@@ -34,11 +37,35 @@
                 {% endif %}
             </div>
 
-            <div class="q-stem">{{ question.stem | safe }}</div>
-
             <!-- 未答题：显示表单 -->
             {% if not result_msg %}
+            {% if is_study_card %}
+            <!-- 学习卡片模式：题干 + 查看答案按钮 -->
+            <div class="q-stem-full">{{ question.stem | safe }}</div>
+            <form action="{{ url_for('chapter_practice_answer', subject_id=subject.id, category_id=category.id, qid=question.id) }}" method="post">
+                <input type="hidden" name="answer" value="__study_card__">
+                <button type="submit" class="btn btn-outline-primary btn-lg mt-3"><i class="fas fa-eye"></i> 查看答案</button>
+            </form>
+            {% else %}
+            <!-- 常规题目：题干 + 选项 -->
+            <div class="q-stem">{{ question.stem | safe }}</div>
             <form id="answerForm" action="{{ url_for('chapter_practice_answer', subject_id=subject.id, category_id=category.id, qid=question.id) }}" method="post">
+                {% if question.qtype_text == '判断题' %}
+                <div class="q-options judge-options">
+                    <div class="q-option judge-btn">
+                        <label>
+                            <input type="radio" name="answer" value="A" required>
+                            <span class="judge-label correct">✅ 正确</span>
+                        </label>
+                    </div>
+                    <div class="q-option judge-btn">
+                        <label>
+                            <input type="radio" name="answer" value="B" required>
+                            <span class="judge-label wrong">❌ 错误</span>
+                        </label>
+                    </div>
+                </div>
+                {% else %}
                 <div class="q-options">
                     {% for key, val in question.options.items() %}
                     <div class="q-option">
@@ -53,12 +80,48 @@
                     </div>
                     {% endfor %}
                 </div>
+                {% endif %}
                 <button type="submit" class="btn btn-primary mt-3"><i class="fas fa-paper-plane"></i> 提交答案</button>
             </form>
             {% endif %}
+            {% endif %}
 
             <!-- 已答题：显示结果 -->
-            {% if result_msg %}
+            {% if is_answered %}
+            <!-- 题干（常规题目重新显示） -->
+            {% if not is_study_card %}
+            <div class="q-stem">{{ question.stem | safe }}</div>
+            {% endif %}
+            {% if is_study_card %}
+            <!-- 学习卡片：显示参考答案（题干已在上方显示，此处不再重复） -->
+            {% if question.answer %}
+            <div class="reference-answer">
+                <h5><i class="fas fa-lightbulb"></i> 参考答案</h5>
+                <div>{{ question.answer | safe }}</div>
+            </div>
+            {% endif %}
+            {% if question.explanation and question.explanation != question.answer %}
+            <div class="q-explanation">
+                <h5><i class="fas fa-comment-dots"></i> 补充说明</h5>
+                <div>{{ question.explanation | safe }}</div>
+            </div>
+            {% endif %}
+            {% elif question.qtype_text == '判断题' %}
+            <div class="q-options result-options judge-options">
+                {% set judge_is_correct = (question.answer == 'A') %}
+                {% set judge_is_user_correct = (question.answer == user_answer) if user_answer else false %}
+                <div class="q-option judge-btn {{ 'opt-correct' if judge_is_correct else ('opt-wrong' if (user_answer == 'A' and not judge_is_correct) else '') }}">
+                    <span class="judge-label correct">✅ 正确</span>
+                    {% if judge_is_correct %}<span class="opt-badge correct">正确答案</span>{% endif %}
+                    {% if user_answer == 'A' and not judge_is_correct %}<span class="opt-badge wrong">你的答案</span>{% endif %}
+                </div>
+                <div class="q-option judge-btn {{ 'opt-correct' if not judge_is_correct else ('opt-wrong' if (user_answer == 'B' and judge_is_correct) else '') }}">
+                    <span class="judge-label wrong">❌ 错误</span>
+                    {% if not judge_is_correct %}<span class="opt-badge correct">正确答案</span>{% endif %}
+                    {% if user_answer == 'B' and judge_is_correct %}<span class="opt-badge wrong">你的答案</span>{% endif %}
+                </div>
+            </div>
+            {% else %}
             <div class="q-options result-options">
                 {% for key, val in question.options.items() %}
                 {% set opt_is_correct = (key == question.answer) %}
@@ -70,13 +133,16 @@
                 </div>
                 {% endfor %}
             </div>
+            {% endif %}
 
-            <!-- P2-10: 部分正确提示 -->
+            <!-- P2-10: 部分正确提示（学习卡片不显示） -->
+            {% if not is_study_card %}
             <div class="result-feedback {{ 'result-correct' if is_correct else ('result-partial' if is_partial else 'result-incorrect') }}">
                 {% if is_correct %}✅ 回答正确！{% elif is_partial %}⚠️ 部分正确。正确答案：<strong>{{ question.answer }}</strong>{% else %}❌ 回答错误。正确答案：<strong>{{ question.answer }}</strong>{% endif %}
             </div>
+            {% endif %}
 
-            {% if question.explanation %}
+            {% if question.explanation and not is_study_card %}
             <div class="q-explanation">
                 <h5><i class="fas fa-lightbulb"></i> 解析</h5>
                 <div>{{ question.explanation | safe }}</div>
@@ -88,11 +154,11 @@
                 <p class="rating-title">你觉得这道题：</p>
                 <form action="{{ url_for('chapter_practice_rate', subject_id=subject.id, category_id=category.id, qid=question.id) }}" method="post" class="rating-form">
                     <div class="rating-buttons">
-                        <button type="submit" name="quality" value="0" class="rating-btn rating-0">😭 忘了</button>
-                        <button type="submit" name="quality" value="1" class="rating-btn rating-1">😕 模糊</button>
-                        <button type="submit" name="quality" value="2" class="rating-btn rating-2">😐 一般</button>
-                        <button type="submit" name="quality" value="3" class="rating-btn rating-3">😊 简单</button>
-                        <button type="submit" name="quality" value="4" class="rating-btn rating-4">🤩 秒答</button>
+                        <button type="submit" name="quality" value="0" class="rating-btn rating-0">😭 忘了 <span class="rating-predict">({{ review_predictions.get(0, '') }})</span></button>
+                        <button type="submit" name="quality" value="1" class="rating-btn rating-1">😕 模糊 <span class="rating-predict">({{ review_predictions.get(1, '') }})</span></button>
+                        <button type="submit" name="quality" value="2" class="rating-btn rating-2">😐 一般 <span class="rating-predict">({{ review_predictions.get(2, '') }})</span></button>
+                        <button type="submit" name="quality" value="3" class="rating-btn rating-3">😊 简单 <span class="rating-predict">({{ review_predictions.get(3, '') }})</span></button>
+                        <button type="submit" name="quality" value="4" class="rating-btn rating-4">🤩 秒答 <span class="rating-predict">({{ review_predictions.get(4, '') }})</span></button>
                     </div>
                 </form>
             </div>
@@ -111,6 +177,32 @@
                     </button>
                 </form>
                 {% endif %}
+            </div>
+
+            <!-- ====== 底部互动区域：三个按钮 + 留言墙 ====== -->
+            <div class="interaction-section">
+                <div class="interaction-buttons">
+                    <button type="button" id="feedbackBtn" class="interaction-btn btn-feedback">
+                        <i class="fas fa-bug"></i> 题目纠错
+                    </button>
+                    <button type="button" id="noteBtn" class="interaction-btn btn-note"
+                            data-url="{{ url_for('manage_note', subject_id=subject.id, qid=question.id) }}">
+                        <i class="fas fa-sticky-note"></i> 我的笔记
+                    </button>
+                    <button type="button" id="commentBtn" class="interaction-btn btn-comment-highlight"
+                            data-url="{{ url_for('question_comments', subject_id=subject.id, qid=question.id) }}">
+                        <i class="fas fa-comments"></i> 留言板
+                    </button>
+                </div>
+
+                <!-- 留言墙（内联展示所有留言） -->
+                <div class="comment-wall">
+                    <h4 class="comment-wall-title"><i class="fas fa-comments"></i> 留言墙</h4>
+                    <div id="commentWallList" class="comment-wall-list">
+                        <p class="comment-wall-loading">加载中...</p>
+                    </div>
+                    <div id="commentWallPagination" class="pagination"></div>
+                </div>
             </div>
             {% endif %}
         </div>
@@ -165,6 +257,23 @@
 .q-option:hover { background: var(--gray-100); }
 .q-option input { margin-right: 0.5rem; }
 
+/* 判断题样式 */
+.judge-options { display: flex; gap: 1rem; justify-content: center; padding: 1rem 0; }
+.judge-btn { text-align: center; padding: 1rem 2rem; border: 2px solid var(--gray-300); border-radius: 12px; min-width: 150px; }
+.judge-btn:hover { background: var(--gray-100); }
+.judge-label { font-size: 1.1rem; font-weight: 600; }
+.judge-label.correct { color: #10b981; }
+.judge-label.wrong { color: #e63946; }
+.judge-btn.opt-correct { border-color: #10b981; background: rgba(16, 185, 129, 0.1); }
+.judge-btn.opt-wrong { border-color: #e63946; background: rgba(230, 57, 70, 0.1); }
+
+/* 学习卡片/参考答案样式 */
+.q-stem-full { margin-bottom: 1rem; line-height: 1.8; font-size: 1.05rem; }
+.reference-answer { background: #fffbe6; border-left: 4px solid #f59e0b; padding: 1.25rem 1.5rem; margin: 1.5rem 0; border-radius: 0 8px 8px 0; }
+.reference-answer h5 { color: #d97706; margin-bottom: 0.75rem; font-size: 1rem; }
+.reference-answer div { line-height: 1.9; color: #374151; }
+.reference-answer p { margin-bottom: 0.5rem; }
+
 .result-options .q-option { pointer-events: none; }
 .opt-correct { background: rgba(46,196,182,0.1); border-left: 3px solid var(--success-color); }
 .opt-wrong { background: rgba(230,57,70,0.1); border-left: 3px solid var(--danger-color); }
@@ -185,6 +294,7 @@
 .rating-buttons { display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
 .rating-btn { padding: 0.5rem 1rem; border: 2px solid var(--gray-300); border-radius: 6px; background: white; cursor: pointer; transition: var(--transition); font-size: 0.9rem; }
 .rating-btn:hover { transform: translateY(-2px); box-shadow: var(--box-shadow); }
+.rating-predict { font-size: 0.75rem; color: var(--gray-500); font-weight: normal; white-space: nowrap; }
 .rating-0:hover { border-color: #e63946; background: #ffe5e8; }
 .rating-1:hover { border-color: #f4a261; background: #fff3e0; }
 .rating-2:hover { border-color: #e9c46a; background: #fffde7; }
@@ -222,5 +332,188 @@
 .legend-dot.orange { background: #f4a261; }
 
 .btn-block { display: block; width: 100%; }
+
+/* ====== 底部互动区域 ====== */
+.interaction-section {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 2px dashed var(--gray-300);
+}
+.interaction-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+}
+.interaction-btn {
+    padding: 0.75rem 1.5rem;
+    border: 2px solid;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 140px;
+    text-align: center;
+}
+.interaction-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.btn-feedback { border-color: #e63946; color: #e63946; background: white; }
+.btn-feedback:hover { background: #e63946; color: white; }
+.btn-note { border-color: #17a2b8; color: #17a2b8; background: white; }
+.btn-note:hover { background: #17a2b8; color: white; }
+.btn-comment-highlight {
+    border-color: #4a90d9;
+    background: #4a90d9;
+    color: white;
+    animation: pulse 2s infinite;
+}
+.btn-comment-highlight:hover { background: #3a7bc8; border-color: #3a7bc8; }
+@keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(74,144,217,0.4); }
+    70% { box-shadow: 0 0 0 10px rgba(74,144,217,0); }
+    100% { box-shadow: 0 0 0 0 rgba(74,144,217,0); }
+}
+
+/* 留言墙 */
+.comment-wall {
+    background: #f8f9fa;
+    border-radius: 12px;
+    padding: 1.5rem;
+}
+.comment-wall-title {
+    margin: 0 0 1rem;
+    font-size: 1.1rem;
+    color: #333;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.comment-wall-title i { color: #4a90d9; }
+.comment-wall-list { min-height: 60px; }
+.comment-wall-loading { text-align: center; color: #999; margin: 1rem 0; }
+.cw-item {
+    background: white;
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.cw-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+.cw-user { font-weight: 600; color: #333; font-size: 0.9rem; }
+.cw-time { font-size: 0.8rem; color: #999; }
+.cw-content { font-size: 0.95rem; color: #444; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.cw-content img { max-width: 100%; max-height: 200px; border-radius: 8px; margin-top: 0.5rem; }
+.cw-delete { background: none; border: none; color: #e63946; font-size: 0.8rem; cursor: pointer; margin-top: 0.5rem; }
+.cw-delete:hover { text-decoration: underline; }
+.cw-empty { text-align: center; color: #999; padding: 1rem; }
+.pagination { display: flex; gap: 4px; justify-content: center; margin-top: 1rem; }
+.page-btn { padding: 4px 10px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer; }
+.page-btn.active { background: #4a90d9; color: #fff; border-color: #4a90d9; }
+
+/* 弹窗 */
+.modal-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0,0,0,0.5); z-index: 1000;
+    display: flex; align-items: center; justify-content: center;
+}
+.modal-content {
+    background: #fff; border-radius: 12px; width: 90%; max-width: 500px;
+    max-height: 85vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+}
+.modal-content.modal-lg { max-width: 700px; }
+.modal-header {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 1rem 1.5rem; border-bottom: 1px solid #eee;
+}
+.modal-header h3 { margin: 0; font-size: 1.1rem; }
+.modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: #666; }
+.modal-body { padding: 1.5rem; }
+.modal-footer { padding: 1rem 1.5rem; border-top: 1px solid #eee; display: flex; gap: 0.5rem; justify-content: flex-end; }
+.form-control { width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 0.95rem; box-sizing: border-box; }
+.form-control:focus { outline: none; border-color: #4a90d9; box-shadow: 0 0 0 2px rgba(74,144,217,0.15); }
+.char-count { text-align: right; font-size: 0.8rem; color: #999; margin-top: 4px; }
+.upload-area { margin-top: 8px; }
+.text-muted { color: #999; }
 </style>
+
+<!-- 纠错弹窗 -->
+<div class="modal-overlay" id="feedbackModal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-bug" style="color:#e63946;"></i> 题目纠错</h3>
+            <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <textarea id="feedbackContent" class="form-control" rows="5" placeholder="请描述题目中的错误或不妥之处..." oninput="updateCharCount('feedbackContent','feedbackCount')"></textarea>
+            <div class="char-count"><span id="feedbackCount">0</span>/500</div>
+            <div class="upload-area">
+                <label class="btn btn-sm btn-outline-secondary">
+                    <i class="fas fa-image"></i> 添加图片
+                    <input type="file" id="feedbackImage" accept="image/*" style="display:none;">
+                </label>
+            </div>
+            <div id="feedbackPreview"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline-secondary modal-close">取消</button>
+            <button id="feedbackSubmit" class="btn btn-danger" data-url="{{ url_for('submit_feedback', subject_id=subject.id, qid=question.id) }}">提交反馈</button>
+        </div>
+    </div>
+</div>
+
+<!-- 笔记弹窗 -->
+<div class="modal-overlay" id="noteModal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-sticky-note" style="color:#17a2b8;"></i> 我的笔记</h3>
+            <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <textarea id="noteContent" class="form-control" rows="5" placeholder="写下你的学习心得..." oninput="updateCharCount('noteContent','noteCount')"></textarea>
+            <div class="char-count"><span id="noteCount">0</span>/500</div>
+            <div class="upload-area">
+                <label class="btn btn-sm btn-outline-secondary">
+                    <i class="fas fa-image"></i> 添加图片
+                    <input type="file" id="noteImage" accept="image/*" style="display:none;">
+                </label>
+            </div>
+            <div id="notePreview"></div>
+            <p class="text-muted" style="font-size:0.8rem;margin-top:8px;">仅自己可见</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline-secondary modal-close">取消</button>
+            <button id="noteSave" class="btn btn-info" data-url="{{ url_for('manage_note', subject_id=subject.id, qid=question.id) }}">保存笔记</button>
+        </div>
+    </div>
+</div>
+
+<!-- 留言板弹窗（发布用） -->
+<div class="modal-overlay" id="commentModal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3><i class="fas fa-pen" style="color:#4a90d9;"></i> 发布留言</h3>
+            <button class="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <textarea id="commentContent" class="form-control" rows="4" placeholder="写下你对这道题的想法..." oninput="updateCharCount('commentContent','commentCount')"></textarea>
+            <div class="char-count"><span id="commentCount">0</span>/500</div>
+            <div class="upload-area">
+                <label class="btn btn-sm btn-outline-secondary">
+                    <i class="fas fa-image"></i> 添加图片
+                    <input type="file" id="commentImage" accept="image/*" style="display:none;">
+                </label>
+            </div>
+            <div id="commentPreview"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-outline-secondary modal-close">取消</button>
+            <button id="commentSubmit" class="btn btn-primary" data-url="{{ url_for('question_comments', subject_id=subject.id, qid=question.id) }}">
+                <i class="fas fa-paper-plane"></i> 发布
+            </button>
+        </div>
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='question-features.js') }}?v=3"></script>
 {% endblock %}

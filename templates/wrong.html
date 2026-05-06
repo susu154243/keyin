@@ -16,7 +16,7 @@
                 <span class="badge badge-danger">题 {{ q.id }}</span>
                 <span class="wrong-count">错误 {{ q.wrong_count }} 次</span>
             </div>
-            <p class="wrong-stem">{{ q.stem }}</p>
+            <p class="wrong-stem">{{ q.stem | safe }}</p>
             <a href="{{ url_for('show_question', subject_id=subject.id, qid=q.id) }}" class="btn btn-sm btn-outline-primary">
                 <i class="fas fa-external-link-alt"></i> 查看题目
             </a>

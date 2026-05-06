@@ -1,0 +1,104 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="staging-edit">
+    <a href="{{ url_for('admin.import_staging_detail', subject_id=record.subject_id) }}" class="back-link">← 返回列表</a>
+    <h1>✏️ 编辑题目</h1>
+    
+    <form method="POST" class="edit-form">
+        <input type="hidden" name="subject_id" value="{{ record.subject_id }}">
+        
+        <div class="form-grid">
+            <div class="form-group">
+                <label>题目编号</label>
+                <input type="text" name="question_id" value="{{ record.question_id or '' }}" placeholder="如：01、1.1">
+                <span class="hint">留空则自动生成 UUID</span>
+            </div>
+            
+            <div class="form-group">
+                <label>正确答案</label>
+                <input type="text" name="correct_answer" value="{{ record.correct_answer }}" placeholder="如：A、AB、BCD" required>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label>题干</label>
+            <textarea name="stem" rows="4" required>{{ record.stem }}</textarea>
+        </div>
+        
+        <div class="form-group">
+            <label>选项</label>
+            <div class="options-grid">
+                <div class="opt-input">
+                    <label>A</label>
+                    <textarea name="option_a" rows="3">{{ record.option_a or '' }}</textarea>
+                </div>
+                <div class="opt-input">
+                    <label>B</label>
+                    <textarea name="option_b" rows="3">{{ record.option_b or '' }}</textarea>
+                </div>
+                <div class="opt-input">
+                    <label>C</label>
+                    <textarea name="option_c" rows="3">{{ record.option_c or '' }}</textarea>
+                </div>
+                <div class="opt-input">
+                    <label>D</label>
+                    <textarea name="option_d" rows="3">{{ record.option_d or '' }}</textarea>
+                </div>
+                <div class="opt-input">
+                    <label>E</label>
+                    <textarea name="option_e" rows="3">{{ record.option_e or '' }}</textarea>
+                </div>
+                <div class="opt-input">
+                    <label>F</label>
+                    <textarea name="option_f" rows="3">{{ record.option_f or '' }}</textarea>
+                </div>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label>分类</label>
+            <select name="category_id">
+                <option value="">-- 不选择 --</option>
+                {% for cat in categories %}
+                <option value="{{ cat.id }}" {% if record.category_id == cat.id %}selected{% endif %}>
+                    {{ '  ├─' if cat.level == 3 else '' }}{{ cat.name }}
+                </option>
+                {% endfor %}
+            </select>
+            <input type="hidden" name="category_name" value="{{ record.category_name or '' }}">
+        </div>
+        
+        <div class="form-group">
+            <label>解析</label>
+            <textarea name="explanation" rows="5">{{ record.explanation or '' }}</textarea>
+        </div>
+        
+        <div class="form-actions">
+            <button type="submit" class="btn btn-primary">💾 保存</button>
+            <a href="{{ url_for('admin.import_staging_detail', subject_id=record.subject_id) }}" class="btn">取消</a>
+        </div>
+    </form>
+</div>
+
+<style>
+.staging-edit { max-width: 800px; }
+.back-link { color: #6b7280; text-decoration: none; font-size: 14px; }
+.back-link:hover { color: #111827; }
+
+.edit-form { background: #fff; border-radius: 8px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-top: 16px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 14px; }
+.form-group input, .form-group textarea, .form-group select {
+    width: 100%; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;
+    font-family: inherit;
+}
+.form-group textarea { resize: vertical; }
+.hint { font-size: 12px; color: #9ca3af; }
+
+.options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.opt-input label { font-weight: 700; color: #4f46e5; font-size: 13px; }
+
+.form-actions { display: flex; gap: 8px; margin-top: 20px; }
+</style>
+{% endblock %}

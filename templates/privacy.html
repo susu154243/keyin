@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+{% block title %}隐私政策 - keyin心语{% endblock %}
+
+{% block content %}
+<div class="legal-page">
+    <div class="legal-header">
+        <a href="{{ url_for('index') }}" class="btn btn-sm btn-outline-primary">
+            <i class="fas fa-arrow-left"></i> 返回首页
+        </a>
+        <h1>隐私政策</h1>
+        <p class="legal-update">最后更新：{{ last_updated or '2026-05-06' }}</p>
+    </div>
+
+    <div class="legal-content">
+        {{ privacy_content | safe if privacy_content else default_privacy | safe }}
+    </div>
+</div>
+{% endblock %}
+
+{% block styles %}
+<style>
+    .legal-page {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 2rem 1rem;
+    }
+    .legal-header { margin-bottom: 2rem; }
+    .legal-header h1 { font-size: 1.8rem; margin: 1rem 0 0.5rem; }
+    .legal-update { color: #999; font-size: 0.9rem; }
+    .legal-content {
+        line-height: 1.8;
+        font-size: 1rem;
+        color: #333;
+    }
+    .legal-content h2 { font-size: 1.3rem; margin: 2rem 0 1rem; color: #333; border-bottom: 1px solid #eee; padding-bottom: 0.5rem; }
+    .legal-content h3 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; color: #555; }
+    .legal-content p { margin: 0.75rem 0; }
+    .legal-content ul { padding-left: 1.5rem; margin: 0.5rem 0; }
+    .legal-content li { margin: 0.3rem 0; }
+</style>
+{% endblock %}

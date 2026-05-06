@@ -1,0 +1,145 @@
+{% extends 'base.html' %}
+
+{% block title %}强化背题 - {{ question.id }}{% endblock %}
+
+{% block content %}
+<div class="memorize-layout">
+    <div class="memorize-header">
+        <a href="{{ url_for('study_setup', subject_id=subject.id, category_id=category.id) }}" class="btn btn-outline-primary btn-sm">
+            <i class="fas fa-arrow-left"></i> 返回列表
+        </a>
+        <span class="memorize-title"><i class="fas fa-book-open"></i> 强化背题</span>
+        <span class="memorize-qid">{{ question.id }}</span>
+    </div>
+
+    <div class="memorize-body">
+        <div class="q-content">
+            <div class="q-stem">
+                {{ question.stem | safe }}
+            </div>
+
+            <div class="q-options">
+                {% for key, val in question.options.items() %}
+                <div class="q-option {{ 'correct' if key in question.answer else '' }}">
+                    <span class="opt-label">{{ key }}</span>
+                    <span class="opt-text">{{ val }}</span>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="memorize-answer">
+            <i class="fas fa-check-circle"></i> 正确答案：<strong>{{ question.answer }}</strong>
+        </div>
+
+        {% if question.explanation %}
+        <div class="memorize-explanation">
+            <h6><i class="fas fa-lightbulb"></i> 解析</h6>
+            <div class="explanation-text">{{ question.explanation | safe }}</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="memorize-footer">
+        <form action="{{ url_for('exit_reinforce', subject_id=subject.id, category_id=category.id, qid=question.id) }}" method="post" style="display:inline;">
+            <button type="submit" class="btn btn-primary btn-lg">
+                <i class="fas fa-check"></i> 我已记住，退出强化
+            </button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block styles %}
+<style>
+.memorize-layout {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 1rem;
+}
+.memorize-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.memorize-title {
+    font-weight: 600;
+    color: #6b21a8;
+    font-size: 1.1rem;
+}
+.memorize-qid {
+    margin-left: auto;
+    color: #888;
+    font-size: 0.9rem;
+}
+.memorize-body {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+.q-stem {
+    font-size: 1.05rem;
+    line-height: 1.8;
+    margin-bottom: 1rem;
+    white-space: pre-wrap;
+}
+.q-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.q-option {
+    display: flex;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    background: #f8f9fa;
+    line-height: 1.6;
+}
+.q-option.correct {
+    background: #f0fdf4;
+    border: 1px solid #22c55e;
+    color: #15803d;
+    font-weight: 600;
+}
+.opt-label {
+    min-width: 1.5rem;
+    font-weight: 600;
+}
+.memorize-answer {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    background: #f0fdf4;
+    border-radius: 8px;
+    color: #15803d;
+    font-size: 1rem;
+}
+.memorize-explanation {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #fffbeb;
+    border-radius: 8px;
+    border-left: 3px solid #f59e0b;
+}
+.memorize-explanation h6 {
+    margin-top: 0;
+    color: #b45309;
+}
+.explanation-text {
+    line-height: 1.8;
+    white-space: pre-wrap;
+    color: #444;
+}
+.memorize-footer {
+    text-align: center;
+    padding: 1rem 0 2rem;
+}
+</style>
+{% endblock %}

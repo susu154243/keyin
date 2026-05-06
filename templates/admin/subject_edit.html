@@ -1,0 +1,28 @@
+{% extends 'admin/base.html' %}
+{% block title %}编辑科目{% endblock %}
+{% block content %}
+<div class="admin-header"><h1><i class="fas fa-edit"></i> 编辑科目</h1></div>
+<div class="card" style="max-width: 500px;">
+    <form method="post">
+        <div class="form-group">
+            <label class="form-label">名称</label>
+            <input type="text" name="name" class="form-control" value="{{ subject.name }}" required>
+        </div>
+        <div class="form-group">
+            <label class="form-label">代码</label>
+            <input type="text" name="code" class="form-control" value="{{ subject.code }}" required>
+            <small class="form-text">只能包含字母、数字和下划线</small>
+        </div>
+        <div class="form-group">
+            <label class="form-label">图标（emoji）</label>
+            <input type="text" name="icon" class="form-control" value="{{ subject.icon }}">
+        </div>
+        <div class="form-group">
+            <label class="form-label">描述</label>
+            <textarea name="description" class="form-control" rows="3">{{ subject.description }}</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> 保存</button>
+        <a href="{{ url_for('admin.subjects') }}" class="btn btn-outline-secondary">取消</a>
+    </form>
+</div>
+{% endblock %}

@@ -17,7 +17,7 @@
     {% if subject_total %}
     <div class="subject-progress-summary">
         <span class="stat-badge stat-total">总题量 {{ subject_total.total }}</span>
-        <span class="stat-badge stat-studied">已学习 {{ subject_total.studied }}</span>
+        <span class="stat-badge stat-studied">未学 {{ subject_total.unstudied }}</span>
         <span class="stat-badge {{ 'stat-due' if subject_total.due > 0 else 'stat-due-empty' }}">待复习 {{ subject_total.due }}</span>
         <span class="stat-badge stat-mastered">已掌握 {{ subject_total.mastered }}</span>
     </div>
@@ -31,7 +31,7 @@
                 <i class="fas fa-folder"></i> {{ level1.name }}
                 {% if level1._stats %}
                 <span class="l1-summary">
-                    总题量 {{ level1._stats.total }} · 已学习 {{ level1._stats.studied }} · <span class="l1-due {{ 'l1-due-alert' if level1._stats.due > 0 }}">待复习 {{ level1._stats.due }}</span> · 已掌握 {{ level1._stats.mastered }}
+                    总题量 {{ level1._stats.total }} · <span class="stat-unstudied">未学 {{ level1._stats.unstudied }}</span> · <span class="l1-due {{ 'l1-due-alert' if level1._stats.due > 0 else 'stat-due-highlight' }}">待复习 {{ level1._stats.due }}</span> · 已掌握 {{ level1._stats.mastered }}
                 </span>
                 {% endif %}
             </h3>
@@ -43,7 +43,7 @@
                         <i class="fas fa-folder-open"></i> {{ level2.name }}
                         {% if level2._stats %}
                         <span class="l2-stats">
-                            总 {{ level2._stats.total }} · 已学 {{ level2._stats.studied }} · <span class="l2-due {{ 'l2-due-alert' if level2._stats.due > 0 }}">待复 {{ level2._stats.due }}</span> · 已掌 {{ level2._stats.mastered }}
+                            总 {{ level2._stats.total }} · <span class="stat-unstudied">未学 {{ level2._stats.unstudied }}</span> · <span class="l2-due {{ 'l2-due-alert' if level2._stats.due > 0 else 'stat-due-highlight' }}">待复 {{ level2._stats.due }}</span> · 已掌 {{ level2._stats.mastered }}
                         </span>
                         {% endif %}
                     </h4>
@@ -104,6 +104,9 @@
     .l1-summary { font-size: 0.82rem; color: var(--gray-500); font-weight: 400; letter-spacing: 0.02em; }
     .l1-due { color: var(--gray-400); }
     .l1-due-alert { color: var(--warning-color); font-weight: 600; animation: pulse-due 2s ease-in-out infinite; }
+    /* 未学 / 待复习 强调 */
+    .stat-unstudied { color: var(--primary-color); font-weight: 600; }
+    .stat-due-highlight { color: var(--warning-color); font-weight: 600; }
     /* 二级行内统计 */
     .l2-stats { font-size: 0.78rem; color: var(--gray-500); font-weight: 400; }
     .l2-due { color: var(--gray-400); }

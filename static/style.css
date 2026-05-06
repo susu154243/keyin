@@ -470,6 +470,15 @@ input[type="radio"] {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.question-actions-top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .question-number {
@@ -1028,6 +1037,23 @@ input[type="radio"] {
 .footer-text {
   color: var(--gray-600);
   font-size: 0.875rem;
+}
+
+.footer-links {
+  display: inline;
+}
+
+.footer-links a {
+  color: var(--primary-color);
+  text-decoration: none;
+  font-weight: 500;
+  margin: 0 0.4rem;
+}
+
+.footer-links a:not(:first-child)::before {
+  content: "|";
+  margin-right: 0.4rem;
+  color: var(--gray-400);
 }
 
 .footer-link {
