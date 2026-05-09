@@ -497,12 +497,23 @@ def check_admin():
         return redirect(url_for('admin.login'))
 
 
+@admin_bp.context_processor
+def inject_admin_notif_counts():
+    """注入管理后台侧栏通知计数"""
+    from models import get_admin_feedback_pending_count, get_admin_comment_unread_count, get_admin_note_unread_count
+    return {
+        'feedback_pending': get_admin_feedback_pending_count(),
+        'comment_active': get_admin_comment_unread_count(),
+        'note_count': get_admin_note_unread_count(),
+    }
+
+
 # ==================== 仪表盘 ====================
 
 @admin_bp.route('/')
 @admin_bp.route('')
 def dashboard():
-    from models import get_db
+    from models import get_db, get_admin_feedback_pending_count, get_admin_comment_unread_count, get_admin_note_unread_count
     conn = get_db()
     cur = conn.cursor()
     
@@ -517,11 +528,19 @@ def dashboard():
     
     conn.close()
     
+    # 通知计数
+    feedback_pending = get_admin_feedback_pending_count()
+    comment_unread = get_admin_comment_unread_count()
+    note_unread = get_admin_note_unread_count()
+    
     return render_template('admin/dashboard.html',
                           active_users=active_users,
                           active_subjects=active_subjects,
                           active_questions=active_questions,
-                          total_answers=total_answers)
+                          total_answers=total_answers,
+                          feedback_pending=feedback_pending,
+                          comment_active=comment_unread,
+                          note_count=note_unread)
 
 
 # ==================== 用户管理 ====================
@@ -1587,7 +1606,26 @@ def admin_feedbacks():
 @admin_bp.route('/feedbacks/<int:fid>/resolve', methods=['POST'])
 @admin_required
 def admin_resolve_feedback(fid):
+    from models import get_db, create_notification, get_question
     resolve_feedback(fid, session.get('user_id'))
+    
+    # 创建用户通知
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM question_feedbacks WHERE id = ?", (fid,))
+    fb = cur.fetchone()
+    conn.close()
+    if fb:
+        q = get_question(fb.get('question_id'))
+        q_title = ''
+        if q:
+            stem = re.sub(r'<[^>]+>', '', q.get('stem', '') or '')
+            q_title = stem[:30]
+        title = f'您提交的题目纠错已处理'
+        content = f'题目: {q_title}\n您的反馈: {fb.get("content", "")[:100]}'
+        create_notification(fb['user_id'], 'feedback_resolved', title, content, fb.get('question_id'))
+    
     flash('已标记为已处理', 'success')
     return redirect(url_for('admin.admin_feedbacks'))
 
@@ -1595,7 +1633,26 @@ def admin_resolve_feedback(fid):
 @admin_bp.route('/feedbacks/<int:fid>/dismiss', methods=['POST'])
 @admin_required
 def admin_dismiss_feedback(fid):
+    from models import get_db, create_notification, get_question
     dismiss_feedback(fid)
+    
+    # 创建用户通知
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM question_feedbacks WHERE id = ?", (fid,))
+    fb = cur.fetchone()
+    conn.close()
+    if fb:
+        q = get_question(fb.get('question_id'))
+        q_title = ''
+        if q:
+            stem = re.sub(r'<[^>]+>', '', q.get('stem', '') or '')
+            q_title = stem[:30]
+        title = f'您提交的题目纠错已忽略'
+        content = f'题目: {q_title}\n您的反馈: {fb.get("content", "")[:100]}'
+        create_notification(fb['user_id'], 'feedback_dismissed', title, content, fb.get('question_id'))
+    
     flash('已忽略', 'success')
     return redirect(url_for('admin.admin_feedbacks'))
 
@@ -1612,6 +1669,9 @@ def admin_delete_feedback(fid):
 @admin_required
 def admin_comments():
     """留言管理"""
+    from models import mark_comments_read
+    mark_comments_read()  # 访问页面时标记所有留言为已读
+    
     page = request.args.get('page', 1, type=int)
     subject_id = request.args.get('subject_id', type=int)
     
@@ -1642,6 +1702,9 @@ from models import get_db
 @admin_required
 def admin_notes():
     """笔记管理"""
+    from models import mark_notes_read
+    mark_notes_read()  # 访问页面时标记所有笔记为已读
+    
     page = request.args.get('page', 1, type=int)
     subject_id = request.args.get('subject_id', type=int)
     

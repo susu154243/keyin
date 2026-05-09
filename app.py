@@ -6,6 +6,7 @@
 import os
 import csv
 import json
+import re
 import sqlite3
 import random
 import string
@@ -101,13 +102,15 @@ def _check_subject_permission(user, subject_id):
 
 
 def _check_subject_license(f):
-    """装饰器：检查用户是否有科目的有效授权"""
+    """装饰器：检查用户是否有科目的有效授权（admin 角色直接放行）"""
     from functools import wraps
     @wraps(f)
     def decorated_function(subject_id, *args, **kwargs):
         user_id = session.get('user_id')
         if not user_id:
             return redirect(url_for('login'))
+        if session.get('role') == 'admin':
+            return f(subject_id, *args, **kwargs)
         license_info = check_user_license(user_id, subject_id)
         if not license_info['has_license'] or license_info['is_expired']:
             flash('您没有该科目的使用授权，请联系管理员', 'error')
@@ -118,7 +121,7 @@ def _check_subject_license(f):
 
 
 def parse_options(options_str):
-    """解析选项字符串为字典 {A: 内容, B: 内容, ...}"""
+    """解析选项字符串为字典 {A: 内容, B: 内容, ...}，清理首尾多余标签"""
     if not options_str:
         return {}
     if isinstance(options_str, dict):
@@ -126,24 +129,65 @@ def parse_options(options_str):
     try:
         parsed = json.loads(options_str)
         if isinstance(parsed, dict):
-            return parsed
+            # 清理包裹选项内容的 <p> 标签和首尾 <br>
+            cleaned = {}
+            for key, val in parsed.items():
+                if isinstance(val, str):
+                    val = val.strip()
+                    # 去除包裹的 <p>...</p>
+                    if val.lower().startswith('<p>') and val.lower().endswith('</p>'):
+                        val = val[3:-4].strip()
+                    # 去除尾随 <br> / <br/> / <br />
+                    while val.lower().endswith(('<br>', '<br/>', '<br />')):
+                        val = val[:-4].rstrip() if val.lower().endswith('<br>') else val[:-5].rstrip()
+                    # 去除开头 <br>
+                    while val.lower().startswith(('<br>', '<br/>', '<br />')):
+                        val = val[4:].lstrip() if val.lower().startswith('<br>') else val[5:].lstrip()
+                cleaned[key] = val
+            return cleaned
         # 数组格式：["内容A", "内容B", ...] -> {A: 内容A, B: 内容B, ...}
         if isinstance(parsed, list):
             labels = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            # Array of objects: [{"label": "A", "text": "..."}, ...]
+            if parsed and isinstance(parsed[0], dict) and 'text' in parsed[0]:
+                return {item['label']: item['text'] for item in parsed if 'label' in item and 'text' in item}
+            # Simple array: ["内容A", "内容B", ...]
             return {labels[i]: parsed[i] for i in range(len(parsed)) if i < len(labels)}
     except (json.JSONDecodeError, TypeError):
         pass
+
+    # Fallback: 文本格式 "A. 内容\nB. 内容\nC. 内容\nD. 内容"
+    lines = options_str.strip().split('\n')
+    parsed_options = {}
+    for line in lines:
+        line = line.strip()
+        match = re.match(r'^([A-F])\.[\s]*(.*)', line, re.DOTALL)
+        if match:
+            key = match.group(1)
+            val = match.group(2).strip()
+            # 清理尾随的「问题2：」等合并题标记（不属于当前选项）
+            val = re.sub(r'[\s\n]*问题\d+[：:].*$', '', val, flags=re.DOTALL)
+            parsed_options[key] = val
+    if parsed_options:
+        return parsed_options
+
     return {}
 
 
 @app.context_processor
 def inject_site_settings():
-    from models import get_all_site_settings as _get_settings
+    from models import get_all_site_settings as _get_settings, get_unread_notification_count
     settings = _get_settings()
-    return {
+    result = {
         'icp_filing': settings.get('icp_filing', ''),
         'police_filing': settings.get('police_filing', ''),
     }
+    # 注入未读通知数（登录用户）
+    if 'user_id' in session:
+        result['notif_unread_count'] = get_unread_notification_count(session['user_id'])
+    else:
+        result['notif_unread_count'] = 0
+    return result
 
 
 # ==================== 认证路由 ====================
@@ -359,8 +403,11 @@ def index():
         s_dict = dict(s)
         s_dict['has_permission'] = sid in allowed_ids
         if s_dict['has_permission']:
-            license_info = check_user_license(user['id'], sid)
-            s_dict['license_info'] = license_info
+            if user['role'] == 'admin':
+                s_dict['license_info'] = None  # admin不显示授权状态
+            else:
+                license_info = check_user_license(user['id'], sid)
+                s_dict['license_info'] = license_info
         else:
             s_dict['license_info'] = None
         # 获取 level，默认 2（中级）
@@ -385,6 +432,8 @@ def index():
                           intermediate=intermediate,
                           primary=primary,
                           current_year=datetime.now().year,
+                          home_guide=site_settings.get('home_guide', ''),
+                          home_update=site_settings.get('home_update', ''),
                           welcome_title=site_settings.get('welcome_title', '欢迎使用 刻印'),
                           welcome_subtitle=site_settings.get('welcome_subtitle', '高效的在线刷题系统，助力学习提升'))
 
@@ -460,6 +509,8 @@ def practice(subject_id):
     category_data = get_subject_category_stats(user['id'], subject_id)
     tree = category_data['tree']
     subject_total = category_data.get('subject_total', {})
+    # 过滤历年真题（真题在历史真题入口，不在练习中重复出现）
+    tree = [t for t in tree if t.get('name') != '历年真题']
     return render_template('practice.html',
                           subject=subject,
                           tree=tree,
@@ -514,11 +565,12 @@ def study_setup(subject_id, category_id):
     subject = get_subject_by_id(subject_id)
     user_id = session['user_id']
 
-    # 授权检查
-    license_info = check_user_license(user_id, subject_id)
-    if not license_info['has_license'] or license_info['is_expired']:
-        flash('您没有该科目的使用授权，请联系管理员', 'error')
-        return redirect(url_for('index'))
+    # 授权检查（admin 直接跳过）
+    if session.get('role') != 'admin':
+        license_info = check_user_license(user_id, subject_id)
+        if not license_info['has_license'] or license_info['is_expired']:
+            flash('您没有该科目的使用授权，请联系管理员', 'error')
+            return redirect(url_for('index'))
 
     # 学习进度统计
     progress = get_study_progress(user_id, category_id)
@@ -633,6 +685,11 @@ def study_setup(subject_id, category_id):
     # 授权状态
     license_info = check_user_license(user_id, subject_id)
 
+    # 检查是否有保存的练习进度
+    from models import load_practice_session
+    saved = load_practice_session(user_id, category_id)
+    has_saved_progress = saved is not None and saved.get('queue')
+
     return render_template('study_setup.html',
                           subject=subject, category=cat,
                           progress=progress,
@@ -721,6 +778,7 @@ def chapter_exam(subject_id, category_id):
         abort(404)
     count = request.args.get('count', type=int)
     questions, _ = _get_all_chapter_questions(category_id, count=count)
+    random.shuffle(questions)  # 打乱顺序
     if not questions:
         flash('该分类下暂无题目', 'info')
         return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
@@ -756,8 +814,7 @@ def chapter_exam_submit(subject_id, category_id):
         if is_correct:
             correct_count += 1
         save_answer(user_id, q['id'], user_answer, 1 if is_correct else 0, subject_id, source='exam')
-        # 考过的题目全部进入复习计划（对=5分，错=0分）
-        update_review_schedule(user_id, q['id'], subject_id, 5 if is_correct else 0)
+        # 考试模式不进入复习队列，仅保留答题记录
         details.append({
             'id': q['id'],
             'stem': q['stem'],
@@ -769,6 +826,9 @@ def chapter_exam_submit(subject_id, category_id):
         })
 
     score = round((correct_count / total * 100), 2) if total > 0 else 0
+    # 保存考试记录（仅成绩，不进入复习队列）
+    from models import save_exam_record
+    save_exam_record(user_id, subject_id, category_id, total, correct_count, score)
     return jsonify({
         'success': True,
         'correct_count': correct_count,
@@ -820,6 +880,19 @@ def chapter_practice_next(subject_id, category_id):
     p = session.get('practice', {})
     if not p:
         return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
+
+    # 补建复习计划：答完题后未评分直接点"下一题"时，自动创建复习计划
+    last_qid = p.get('last_answered_qid')
+    if last_qid:
+        from models import get_review_schedule
+        rs = get_review_schedule(session['user_id'], last_qid)
+        if not rs:
+            # 该题已答但未创建复习计划，自动补建
+            a = p.get('answered', {}).get(last_qid, {})
+            quality = 2 if a.get('is_correct') else 0
+            update_review_schedule(session['user_id'], last_qid, subject_id, quality)
+        p['last_answered_qid'] = None
+        session['practice'] = p
 
     queue = p.get('queue', [])
     if not queue:
@@ -957,6 +1030,8 @@ def chapter_practice_answer(subject_id, category_id, qid):
     # 更新会话统计
     p = session.get('practice', {})
     p['total_attempts'] = p.get('total_attempts', 0) + 1
+    # 记录当前答题 qid，用于后续自动补建复习计划
+    p['last_answered_qid'] = qid
 
     answered = p.setdefault('answered', {})
     answered[qid] = {
@@ -1011,6 +1086,7 @@ def chapter_practice_answer(subject_id, category_id, qid):
     is_answered = bool(result_msg) or is_study_card
     return render_template('chapter_practice.html',
                           question=question,
+                          is_study_card=is_study_card,
                           user_answer=user_answer,
                           user_answer_list=user_answer_list,
                           result_msg=result_msg,
@@ -1440,14 +1516,37 @@ def wrong_questions(subject_id):
 @login_required
 @_check_subject_license
 def exam_years(subject_id):
-    """历史真题 - 按年份选择"""
+    """历史真题 - 按分类选择（参照章节练习）"""
     subject = get_subject_by_id(subject_id)
-    years = get_exam_years(subject_id)
-    year_counts = []
-    for year in years:
-        rows = get_questions_by_year(subject_id, year)
-        year_counts.append((year, len(rows)))
-    return render_template('exam_years.html', subject=subject, years=year_counts)
+    user_id = session.get('user_id')
+
+    # 找到"历年真题"根分类
+    from models import get_categories_tree
+    tree = get_categories_tree(subject_id)
+    exam_root = None
+    for node in tree:
+        if node.get('name') == '历年真题':
+            exam_root = node
+            break
+
+    # 构建真题分类树 + 统计
+    exam_tree = None
+    subject_total = None
+    if exam_root:
+        # 复用 get_subject_category_stats 但只取真题分支
+        stats_data = get_subject_category_stats(user_id, subject_id)
+        full_tree = stats_data.get('tree', [])
+        subject_total = stats_data.get('subject_total', {})
+        # 找到真题分支
+        for node in full_tree:
+            if node.get('name') == '历年真题':
+                exam_tree = [node]
+                break
+
+    return render_template('exam_years.html',
+                          subject=subject,
+                          tree=exam_tree,
+                          subject_total=subject_total)
 
 
 @app.route('/subjects/<int:subject_id>/exams/<int:year>')
@@ -1879,6 +1978,151 @@ def forbidden(e):
 @app.errorhandler(500)
 def server_error(e):
     return render_template('error.html', error_code=500, error_message="服务器错误"), 500
+
+
+# ==================== 练习进度持久化 ====================
+
+@app.before_request
+def _ensure_practice_table():
+    """确保 practice_sessions 表已创建（懒初始化）"""
+    from models import init_practice_sessions_table
+    init_practice_sessions_table()
+
+
+@app.before_request
+def _ensure_exam_records_table():
+    """确保 exam_records 表已创建（懒初始化）"""
+    from models import init_exam_records_table
+    init_exam_records_table()
+
+
+@app.before_request
+def _ensure_notifications_table():
+    """确保 notifications 表已创建（懒初始化）"""
+    from models import init_notifications_table
+    init_notifications_table()
+
+
+@app.before_request
+def _ensure_admin_read_columns():
+    """确保留言和笔记表有 read_by_admin_at 列（懒迁移）"""
+    from models import get_db
+    conn = get_db()
+    cur = conn.cursor()
+    try:
+        cur.execute("ALTER TABLE question_comments ADD COLUMN read_by_admin_at DATETIME")
+    except Exception:
+        pass  # 列已存在
+    try:
+        cur.execute("ALTER TABLE question_notes ADD COLUMN read_by_admin_at DATETIME")
+    except Exception:
+        pass
+    conn.commit()
+    conn.close()
+
+
+@app.route('/subjects/<int:subject_id>/practice/<int:category_id>/save-progress', methods=['POST'])
+@login_required
+def practice_save_progress(subject_id, category_id):
+    """保存练习进度到数据库"""
+    import json
+    from models import save_practice_session
+    p = session.get('practice', {})
+    if not p:
+        return jsonify({'success': False, 'error': '无练习进度可保存'})
+    current_qid = request.form.get('current_qid', '')
+    save_practice_session(
+        session['user_id'], category_id, subject_id,
+        p.get('queue', []), p.get('answered', {}),
+        p.get('retry_count', {}), p.get('stubborn', []),
+        p.get('total_attempts', 0), p.get('answered_correct_first', 0),
+        p.get('answered_wrong', 0), p.get('initial_count', 0),
+        current_qid
+    )
+    return jsonify({'success': True})
+
+
+@app.route('/subjects/<int:subject_id>/practice/<int:category_id>/resume-saved', methods=['GET'])
+@login_required
+def practice_resume_saved(subject_id, category_id):
+    """从数据库恢复练习进度"""
+    import json
+    from models import load_practice_session, get_category
+    cat = get_category(category_id)
+    if not cat or cat['subject_id'] != subject_id:
+        abort(404)
+    saved = load_practice_session(session['user_id'], category_id)
+    if not saved:
+        flash('未找到保存的进度', 'warning')
+        return redirect(url_for('study_setup', subject_id=subject_id, category_id=category_id))
+    # 恢复到 session
+    session['practice'] = {
+        'category_id': saved['category_id'],
+        'subject_id': saved['subject_id'],
+        'queue': saved['queue'],
+        'answered': saved['answered'],
+        'retry_count': saved['retry_count'],
+        'stubborn': saved['stubborn'],
+        'total_attempts': saved['total_attempts'],
+        'answered_correct_first': saved['answered_correct_first'],
+        'answered_wrong': saved['answered_wrong'],
+        'initial_count': saved['initial_count'],
+    }
+    qid = saved.get('current_qid')
+    if qid and qid in saved['queue']:
+        return redirect(url_for('chapter_practice_qid', subject_id=subject_id, category_id=category_id, qid=qid))
+    return redirect(url_for('chapter_practice_next', subject_id=subject_id, category_id=category_id))
+
+
+@app.route('/subjects/<int:subject_id>/practice/<int:category_id>/clear-saved', methods=['POST'])
+@login_required
+def practice_clear_saved(subject_id, category_id):
+    """清除保存的练习进度"""
+    from models import clear_practice_session
+    clear_practice_session(session['user_id'], category_id)
+    return jsonify({'success': True})
+
+
+# ==================== 通知中心 ====================
+
+@app.route('/notifications')
+@login_required
+def notifications():
+    """用户通知中心"""
+    from models import get_user_notifications, get_unread_notification_count
+    page = request.args.get('page', 1, type=int)
+    notifs, total = get_user_notifications(session['user_id'], page=page, per_page=20)
+    unread = get_unread_notification_count(session['user_id'])
+    total_pages = max(1, (total + 20 - 1) // 20)
+    return render_template('notifications.html', notifs=notifs, page=page, total_pages=total_pages, total=total, unread=unread)
+
+
+@app.route('/notifications/<int:nid>/read', methods=['POST'])
+@login_required
+def mark_notification_read(nid):
+    """标记通知为已读"""
+    from models import mark_notification_read
+    mark_notification_read(nid, session['user_id'])
+    return redirect(url_for('notifications'))
+
+
+@app.route('/notifications/read-all', methods=['POST'])
+@login_required
+def mark_all_notifications_read():
+    """标记所有通知为已读"""
+    from models import mark_all_notifications_read
+    mark_all_notifications_read(session['user_id'])
+    return redirect(url_for('notifications'))
+
+
+@app.route('/notifications/<int:nid>/delete', methods=['POST'])
+@login_required
+def delete_notification_route(nid):
+    """删除通知"""
+    from models import delete_notification
+    delete_notification(nid, session['user_id'])
+    flash('已删除', 'success')
+    return redirect(url_for('notifications'))
 
 
 if __name__ == '__main__':

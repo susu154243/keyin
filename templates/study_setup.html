@@ -44,7 +44,7 @@
     </div>
     {% endif %}
 
-    <!-- P2-6: 继续上次练习 -->
+    <!-- P2-6: 继续上次练习（session） -->
     {% if session.get('practice') and session['practice'].get('category_id') == category.id %}
     <div class="resume-alert mb-3">
         <div class="alert alert-warning d-flex align-items-center justify-content-between">
@@ -55,6 +55,24 @@
             <a href="{{ url_for('chapter_practice_next', subject_id=subject.id, category_id=category.id) }}" class="btn btn-sm btn-warning">
                 继续练习
             </a>
+        </div>
+    </div>
+    {% elif has_saved_progress %}
+    <!-- 恢复上次保存的进度 -->
+    <div class="resume-alert mb-3">
+        <div class="alert alert-info d-flex align-items-center justify-content-between">
+            <div>
+                <i class="fas fa-history"></i>
+                发现上次保存的练习进度（{{ saved.queue | length }} 题）
+            </div>
+            <div class="d-flex gap-2">
+                <a href="{{ url_for('practice_resume_saved', subject_id=subject.id, category_id=category.id) }}" class="btn btn-sm btn-info">
+                    <i class="fas fa-play"></i> 恢复练习
+                </a>
+                <button type="button" class="btn btn-sm btn-outline-danger" id="clearSavedBtn">
+                    <i class="fas fa-trash"></i> 清除
+                </button>
+            </div>
         </div>
     </div>
     {% endif %}
@@ -727,4 +745,21 @@ applyFilterAndSort();
 
 .resume-alert .alert { margin-bottom: 0; padding: 0.75rem 1rem; }
 </style>
+
+{% if has_saved_progress %}
+<script>
+document.getElementById('clearSavedBtn')?.addEventListener('click', function() {
+    if (!confirm('确定要清除保存的练习进度吗？')) return;
+    fetch('{{ url_for("practice_clear_saved", subject_id=subject.id, category_id=category.id) }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) location.reload();
+    });
+});
+</script>
+{% endif %}
+
 {% endblock %}

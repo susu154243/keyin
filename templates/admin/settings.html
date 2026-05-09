@@ -10,11 +10,34 @@
 <div style="background: white; border-radius: var(--border-radius); padding: 1.5rem; box-shadow: var(--box-shadow);">
     <form method="post" action="{{ url_for('admin.admin_settings_save') }}">
         
-        <!-- 首页欢迎区 -->
+        <!-- 首页使用指南 -->
         <div style="margin-bottom: 2rem;">
             <h3 style="margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #eee;">
-                <i class="fas fa-home"></i> 首页欢迎区
+                <i class="fas fa-compass"></i> 首页使用指南
             </h3>
+            
+            <div class="form-group">
+                <label for="home_guide">指南内容</label>
+                <textarea id="home_guide" name="setting_home_guide"
+                          class="form-control form-control-lg" rows="8"
+                          placeholder="支持 HTML 标签（h4, p, ul, li, ol 等）。留空时首页不显示">{{ settings.get('home_guide', '') }}</textarea>
+                <small class="text-muted">支持 HTML 标签。留空时首页不显示该版块。</small>
+            </div>
+        </div>
+        
+        <!-- 首页更新记录 -->
+        <div style="margin-bottom: 2rem;">
+            <h3 style="margin: 0 0 1rem; padding-bottom: 0.5rem; border-bottom: 1px solid #eee;">
+                <i class="fas fa-history"></i> 首页更新记录
+            </h3>
+            
+            <div class="form-group">
+                <label for="home_update">更新记录内容</label>
+                <textarea id="home_update" name="setting_home_update"
+                          class="form-control form-control-lg" rows="8"
+                          placeholder="支持 HTML 标签（h4, p, ul, li 等）。留空时首页不显示">{{ settings.get('home_update', '') }}</textarea>
+                <small class="text-muted">支持 HTML 标签。留空时首页不显示该版块。</small>
+            </div>
         </div>
         
         <!-- 备案信息 -->

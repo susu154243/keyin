@@ -13,6 +13,39 @@
     </div>
 </div>
 
+{% if home_guide or home_update %}
+<div class="home-dual-section mb-4">
+    {% if home_guide %}
+    <div class="home-card">
+        <div class="home-card-header">
+            <h3><i class="fas fa-compass"></i> 使用指南</h3>
+            <button class="home-toggle-btn" onclick="toggleHomeSection('guide')">
+                <i class="fas fa-chevron-down" id="guide-icon"></i>
+                <span id="guide-btn-text">展开</span>
+            </button>
+        </div>
+        <div class="home-card-body home-collapsible" id="guide-body">
+            {{ home_guide | safe }}
+        </div>
+    </div>
+    {% endif %}
+    {% if home_update %}
+    <div class="home-card">
+        <div class="home-card-header">
+            <h3><i class="fas fa-history"></i> 更新记录</h3>
+            <button class="home-toggle-btn" onclick="toggleHomeSection('update')">
+                <i class="fas fa-chevron-down" id="update-icon"></i>
+                <span id="update-btn-text">展开</span>
+            </button>
+        </div>
+        <div class="home-card-body home-collapsible" id="update-body">
+            {{ home_update | safe }}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
 {% if subjects %}
 <div class="features-section mb-4">
     <h2 class="card-title mb-3"><i class="fas fa-layer-group"></i> 我的科目</h2>
@@ -104,5 +137,115 @@
     .level-title-advanced { color: #8b5cf6; border-bottom: 2px solid #8b5cf6; }
     .level-title-intermediate { color: #f59e0b; border-bottom: 2px solid #f59e0b; }
     .level-title-primary { color: #3b82f6; border-bottom: 2px solid #3b82f6; }
+    /* 首页单列卡片 */
+    .home-dual-section {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+    .home-card {
+        background: white;
+        border-radius: var(--border-radius);
+        box-shadow: var(--box-shadow);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+    .home-card-header {
+        padding: 0.6rem 1rem;
+        border-bottom: 1px solid #eee;
+        flex-shrink: 0;
+        background: #fafbfc;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .home-card-header h3 { margin: 0; font-size: 0.95rem; font-weight: 600; }
+    .home-card-header h3 i { margin-right: 6px; color: var(--primary-color); }
+    .home-toggle-btn {
+        background: var(--primary-color);
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        padding: 0.25rem 0.6rem;
+        font-size: 0.8rem;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        transition: background 0.2s;
+    }
+    .home-toggle-btn:hover {
+        background: #5a85e6;
+    }
+    .home-toggle-btn i {
+        transition: transform 0.2s;
+        font-size: 0.7rem;
+    }
+    .home-toggle-btn i.rotated {
+        transform: rotate(180deg);
+    }
+    .home-collapsible {
+        overflow-y: auto;
+        transition: max-height 0.3s ease, padding 0.3s ease;
+    }
+    .home-collapsible.collapsed {
+        max-height: 0 !important;
+        padding: 0 1rem;
+        overflow: hidden;
+    }
+    .home-card-body::-webkit-scrollbar { width: 4px; }
+    .home-card-body::-webkit-scrollbar-thumb { background: #ccc; border-radius: 2px; }
+    .home-card-body h4 { font-size: 0.85rem; margin: 0.5rem 0 0.2rem; color: #333; font-weight: 600; }
+    .home-card-body p, .home-card-body li { font-size: 0.82rem; color: #555; }
+    .home-card-body ul, .home-card-body ol { padding-left: 1.2rem; margin: 0.3rem 0; }
+    .home-card-body.expanded {
+        padding: 0.6rem 1rem;
+        line-height: 1.6;
+        overflow-y: visible;
+    }
 </style>
+
+<script>
+function toggleHomeSection(name) {
+    const body = document.getElementById(name + '-body');
+    const icon = document.getElementById(name + '-icon');
+    const btnText = document.getElementById(name + '-btn-text');
+    const isCollapsed = body.classList.contains('collapsed');
+
+    if (isCollapsed) {
+        body.classList.remove('collapsed');
+        body.classList.add('expanded');
+        icon.classList.add('rotated');
+        btnText.textContent = '收起';
+        localStorage.setItem('home_' + name, 'expanded');
+    } else {
+        body.classList.remove('expanded');
+        body.classList.add('collapsed');
+        icon.classList.remove('rotated');
+        btnText.textContent = '展开';
+        localStorage.setItem('home_' + name, 'collapsed');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    ['guide', 'update'].forEach(function(name) {
+        const body = document.getElementById(name + '-body');
+        const icon = document.getElementById(name + '-icon');
+        const btnText = document.getElementById(name + '-btn-text');
+        if (!body || !icon || !btnText) return;
+
+        const state = localStorage.getItem('home_' + name);
+        // 默认收起，除非用户之前展开过
+        if (state === 'expanded') {
+            body.classList.add('expanded');
+            icon.classList.add('rotated');
+            btnText.textContent = '收起';
+        } else {
+            body.classList.add('collapsed');
+            btnText.textContent = '展开';
+        }
+    });
+});
+</script>
 {% endblock %}

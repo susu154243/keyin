@@ -3698,3 +3698,300 @@ def get_comment_stats():
     stats = {row[0]: row[1] for row in cur.fetchall()}
     conn.close()
     return stats
+
+
+# ==================== 练习进度持久化 ====================
+
+def save_practice_session(user_id, category_id, subject_id, queue, answered, retry_count, stubborn, total_attempts, answered_correct_first, answered_wrong, initial_count, current_qid=None):
+    """保存练习进度到数据库"""
+    import json
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT OR REPLACE INTO practice_sessions
+        (user_id, category_id, subject_id, queue, answered, retry_count, stubborn,
+         total_attempts, answered_correct_first, answered_wrong, initial_count, current_qid, saved_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    """, (
+        user_id, category_id, subject_id,
+        json.dumps(queue), json.dumps(answered), json.dumps(retry_count), json.dumps(stubborn),
+        total_attempts, answered_correct_first, answered_wrong, initial_count, current_qid
+    ))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def load_practice_session(user_id, category_id):
+    """加载最近保存的练习进度"""
+    import json
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM practice_sessions
+        WHERE user_id = ? AND category_id = ?
+        ORDER BY saved_at DESC LIMIT 1
+    """, (user_id, category_id))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        'category_id': row['category_id'],
+        'subject_id': row['subject_id'],
+        'queue': json.loads(row['queue']),
+        'answered': json.loads(row['answered']),
+        'retry_count': json.loads(row['retry_count']),
+        'stubborn': json.loads(row['stubborn']),
+        'total_attempts': row['total_attempts'],
+        'answered_correct_first': row['answered_correct_first'],
+        'answered_wrong': row['answered_wrong'],
+        'initial_count': row['initial_count'],
+        'current_qid': row['current_qid'],
+        'saved_at': row['saved_at'],
+    }
+
+
+def clear_practice_session(user_id, category_id):
+    """清除保存的练习进度"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM practice_sessions WHERE user_id = ? AND category_id = ?", (user_id, category_id))
+    conn.commit()
+    conn.close()
+    return True
+
+
+def init_practice_sessions_table():
+    """初始化 practice_sessions 表"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS practice_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            category_id INTEGER NOT NULL,
+            subject_id INTEGER NOT NULL,
+            queue TEXT NOT NULL DEFAULT '[]',
+            answered TEXT NOT NULL DEFAULT '{}',
+            retry_count TEXT NOT NULL DEFAULT '{}',
+            stubborn TEXT NOT NULL DEFAULT '[]',
+            total_attempts INTEGER DEFAULT 0,
+            answered_correct_first INTEGER DEFAULT 0,
+            answered_wrong INTEGER DEFAULT 0,
+            initial_count INTEGER NOT NULL DEFAULT 0,
+            current_qid TEXT,
+            saved_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, category_id)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+# ==================== 考试记录 ====================
+
+def init_exam_records_table():
+    """初始化 exam_records 表"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS exam_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subject_id INTEGER NOT NULL,
+            category_id INTEGER NOT NULL,
+            total INTEGER NOT NULL DEFAULT 0,
+            correct_count INTEGER NOT NULL DEFAULT 0,
+            score REAL NOT NULL DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+def save_exam_record(user_id, subject_id, category_id, total, correct_count, score):
+    """保存一次考试记录"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO exam_records (user_id, subject_id, category_id, total, correct_count, score)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (user_id, subject_id, category_id, total, correct_count, score))
+    conn.commit()
+    conn.close()
+
+
+def get_exam_records(user_id, subject_id=None, category_id=None):
+    """获取用户的考试记录列表"""
+    conn = get_db()
+    cur = conn.cursor()
+    if category_id:
+        cur.execute("""
+            SELECT * FROM exam_records
+            WHERE user_id = ? AND category_id = ?
+            ORDER BY created_at DESC
+        """, (user_id, category_id))
+    elif subject_id:
+        cur.execute("""
+            SELECT * FROM exam_records
+            WHERE user_id = ? AND subject_id = ?
+            ORDER BY created_at DESC
+        """, (user_id, subject_id))
+    else:
+        cur.execute("""
+            SELECT * FROM exam_records
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+        """, (user_id,))
+    result = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return result
+
+
+# ==================== 通知系统 ====================
+
+def init_notifications_table():
+    """初始化 notifications 表"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT,
+            question_id TEXT,
+            is_read INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_notif_user_read ON notifications(user_id, is_read)")
+    conn.commit()
+    conn.close()
+
+
+def create_notification(user_id, notif_type, title, content=None, question_id=None):
+    """创建通知"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO notifications (user_id, type, title, content, question_id) VALUES (?, ?, ?, ?, ?)",
+        (user_id, notif_type, title, content[:500] if content else None, question_id)
+    )
+    conn.commit()
+    row_id = cur.lastrowid
+    conn.close()
+    return row_id
+
+
+def get_unread_notification_count(user_id):
+    """获取用户未读通知数"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0", (user_id,))
+    count = cur.fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_user_notifications(user_id, page=1, per_page=20):
+    """获取用户通知列表"""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    offset = (page - 1) * per_page
+    cur.execute("SELECT COUNT(*) FROM notifications WHERE user_id = ?", (user_id,))
+    total = cur.fetchone()[0]
+    cur.execute(
+        """SELECT * FROM notifications
+           WHERE user_id = ?
+           ORDER BY created_at DESC
+           LIMIT ? OFFSET ?""",
+        (user_id, per_page, offset)
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return rows, total
+
+
+def mark_notification_read(notif_id, user_id):
+    """标记通知为已读"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?",
+        (notif_id, user_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def mark_all_notifications_read(user_id):
+    """标记用户所有通知为已读"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE notifications SET is_read = 1 WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
+def delete_notification(notif_id, user_id):
+    """删除通知"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM notifications WHERE id = ? AND user_id = ?", (notif_id, user_id))
+    conn.commit()
+    conn.close()
+
+
+# 管理员通知统计
+
+def get_admin_feedback_pending_count():
+    """获取待处理纠错数"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM question_feedbacks WHERE status = 'pending' OR status IS NULL")
+    count = cur.fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_admin_comment_unread_count():
+    """获取未读留言数"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM question_comments WHERE read_by_admin_at IS NULL AND status = 'active'")
+    count = cur.fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_admin_note_unread_count():
+    """获取未读笔记数"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM question_notes WHERE read_by_admin_at IS NULL")
+    count = cur.fetchone()[0]
+    conn.close()
+    return count
+
+
+def mark_comments_read():
+    """标记所有未读留言为已读"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE question_comments SET read_by_admin_at = CURRENT_TIMESTAMP WHERE read_by_admin_at IS NULL AND status = 'active'")
+    conn.commit()
+    conn.close()
+
+
+def mark_notes_read():
+    """标记所有未读笔记为已读"""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("UPDATE question_notes SET read_by_admin_at = CURRENT_TIMESTAMP WHERE read_by_admin_at IS NULL")
+    conn.commit()
+    conn.close()

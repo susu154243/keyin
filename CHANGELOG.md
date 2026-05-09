@@ -1,5 +1,38 @@
 # 刻印 (KeyIn) 变更日志
 
+## v0.14.1 - 2026-05-08
+**留言/笔记未读计数修复**
+
+- 修复留言和笔记通知数字无法消除的问题
+  - 新增 `read_by_admin_at` 字段（question_comments / question_notes）
+  - 改为只统计未读数量（`read_by_admin_at IS NULL`）
+  - 访问留言管理/笔记管理页面时自动标记为已读
+- 仪表盘统计卡片文案："总笔记数" → "未读笔记"
+
+## v0.14.0 - 2026-05-08
+**站内通知系统上线**
+
+- 新增 `notifications` 表（通知中心）
+- 用户侧：
+  - 导航栏新增通知铃铛图标 + 未读计数红点
+  - 新增 `/notifications` 通知中心页面（分页、标记已读、删除、全部已读）
+  - 管理员处理/忽略纠错时自动通知用户
+- 管理员侧：
+  - 管理后台侧栏增加纠错/留言/笔记未处理计数红点
+  - 仪表盘新增通知统计卡片（待处理纠错/未读留言/总笔记数）
+- 新增 models.py 函数：`init_notifications_table`, `create_notification`, `get_unread_notification_count`, `get_user_notifications`, `mark_notification_read`, `mark_all_notifications_read`, `delete_notification`
+- 新增 admin.py 函数：`get_admin_feedback_pending_count`, `get_admin_comment_active_count`, `get_admin_note_count`
+
+## v0.13.1 - 2026-05-08
+**练习模式复习计划缺失修复 + 队列弹出修复**
+
+- 修复答完题跳过评分直接点"下一题"时，review_schedule 未创建导致题目列表显示"未学习"
+  - `chapter_practice_answer`：记录当前答题 qid 到 session（`last_answered_qid`）
+  - `chapter_practice_next`：进入下一题前检查上一题是否缺少复习计划，自动补建
+- 修复答对时队列未弹出导致"下一题永远跳到第一题"
+  - `chapter_practice_answer`：答对时从队列头部弹出当前题
+- 修复用户 63 历史缺失的 7 条 review_schedule 记录
+
 ## v0.13.0 - 2026-05-01
 **练习模式题目分流 + 新增已掌握版块**
 

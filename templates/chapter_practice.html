@@ -177,6 +177,9 @@
                     </button>
                 </form>
                 {% endif %}
+                <button type="button" id="saveProgressBtn" class="btn btn-outline-warning">
+                    <i class="fas fa-save"></i> 保存进度并退出
+                </button>
             </div>
 
             <!-- ====== 底部互动区域：三个按钮 + 留言墙 ====== -->
@@ -515,5 +518,56 @@
     </div>
 </div>
 
-<script src="{{ url_for('static', filename='question-features.js') }}?v=3"></script>
+<script src="{{ url_for('static', filename='question-features.js') }}?v=6"></script>
+<script>
+// 退出前提醒（仅关闭标签/离开站点时触发，不拦截正常答题提交）
+let hasUnsavedProgress = true;
+
+// 页面内任何表单提交都视为正常操作，清除离开提醒
+document.addEventListener('submit', function() {
+    hasUnsavedProgress = false;
+}, true);
+
+// 页面内任何点击操作（链接、按钮等）也视为正常操作
+document.addEventListener('click', function() {
+    hasUnsavedProgress = false;
+}, true);
+
+window.addEventListener('beforeunload', function(e) {
+    if (hasUnsavedProgress) {
+        e.preventDefault();
+        e.returnValue = '练习进度尚未保存，确定要离开吗？';
+        return e.returnValue;
+    }
+});
+
+// 保存进度并退出
+document.getElementById('saveProgressBtn')?.addEventListener('click', function() {
+    const btn = this;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 保存中...';
+    
+    fetch('{{ url_for("practice_save_progress", subject_id=subject.id, category_id=category.id) }}', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'current_qid={{ question.id }}'
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            hasUnsavedProgress = false;
+            window.location.href = '{{ url_for("study_setup", subject_id=subject.id, category_id=category.id) }}';
+        } else {
+            alert('保存失败：' + (data.error || '未知错误'));
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-save"></i> 保存进度并退出';
+        }
+    })
+    .catch(err => {
+        alert('保存失败，请重试');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-save"></i> 保存进度并退出';
+    });
+});
+</script>
 {% endblock %}

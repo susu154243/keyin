@@ -75,7 +75,7 @@
 
 <script>
 const questions = {{ questions | tojson }};
-const submitUrl = "{{ url_for('chapter_exam_submit', subject_id=subject.id, category_id=category.id) }}";
+const submitUrl = "{{ url_for('chapter_exam_submit', subject_id=subject.id, category_id=category.id) }}?count={{ questions|length }}";
 const answered = {};
 
 // 监听选项变化更新导航状态

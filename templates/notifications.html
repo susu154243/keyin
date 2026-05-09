@@ -1,0 +1,77 @@
+{% extends 'base.html' %}
+{% block title %}通知中心 - 刻印{% endblock %}
+{% block content %}
+<div class="container" style="max-width: 800px; margin: 2rem auto;">
+    <div class="d-flex justify-content-between align-items-center" style="margin-bottom: 1.5rem;">
+        <h2 style="margin: 0;"><i class="fas fa-bell"></i> 通知中心</h2>
+        {% if unread > 0 %}
+        <form method="POST" action="{{ url_for('mark_all_notifications_read') }}" style="display:inline;">
+            <button type="submit" class="btn btn-outline-primary" style="font-size: 0.9rem;">
+                <i class="fas fa-check-double"></i> 全部标记为已读
+            </button>
+        </form>
+        {% endif %}
+    </div>
+
+    {% if notifs %}
+    <div class="card" style="padding: 0; overflow: hidden;">
+        {% for n in notifs %}
+        <div style="padding: 1rem 1.5rem; border-bottom: 1px solid var(--gray-200); {% if n.is_read == 0 %}background: #f8f9fa;{% endif %}">
+            <div class="d-flex justify-content-between align-items-start">
+                <div style="flex: 1;">
+                    <div class="d-flex align-items-center gap-2">
+                        {% if n.type == 'feedback_resolved' %}
+                        <span style="color: #27ae60;"><i class="fas fa-check-circle"></i></span>
+                        {% elif n.type == 'feedback_dismissed' %}
+                        <span style="color: #95a5a6;"><i class="fas fa-minus-circle"></i></span>
+                        {% else %}
+                        <span style="color: #3498db;"><i class="fas fa-info-circle"></i></span>
+                        {% endif %}
+                        <strong style="{% if n.is_read == 0 %}color: var(--primary-color);{% endif %}">{{ n.title }}</strong>
+                    </div>
+                    {% if n.content %}
+                    <p style="margin: 0.5rem 0 0; color: var(--gray-600); font-size: 0.9rem; white-space: pre-line;">{{ n.content }}</p>
+                    {% endif %}
+                    <div style="margin-top: 0.5rem; font-size: 0.8rem; color: var(--gray-500);">
+                        {{ n.created_at }}
+                    </div>
+                </div>
+                <div class="d-flex gap-2" style="flex-shrink: 0;">
+                    {% if n.is_read == 0 %}
+                    <form method="POST" action="{{ url_for('mark_notification_read', nid=n.id) }}" style="display:inline;">
+                        <button type="submit" class="btn btn-sm btn-outline-success" title="标记已读">
+                            <i class="fas fa-check"></i>
+                        </button>
+                    </form>
+                    {% endif %}
+                    <form method="POST" action="{{ url_for('delete_notification_route', nid=n.id) }}" style="display:inline;">
+                        <button type="submit" class="btn btn-sm btn-outline-danger" title="删除" onclick="return confirm('确定删除？')">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if total_pages > 1 %}
+    <div class="d-flex justify-content-center" style="margin-top: 1.5rem;">
+        {% if page > 1 %}
+        <a href="{{ url_for('notifications', page=page-1) }}" class="btn btn-outline-secondary" style="margin-right: 0.5rem;">上一页</a>
+        {% endif %}
+        <span style="line-height: 36px; color: var(--gray-600);">第 {{ page }} / {{ total_pages }} 页</span>
+        {% if page < total_pages %}
+        <a href="{{ url_for('notifications', page=page+1) }}" class="btn btn-outline-secondary" style="margin-left: 0.5rem;">下一页</a>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="card" style="text-align: center; padding: 3rem; color: var(--gray-500);">
+        <i class="fas fa-bell-slash" style="font-size: 3rem; margin-bottom: 1rem;"></i>
+        <p>暂无通知</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

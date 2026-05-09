@@ -68,12 +68,21 @@
             </a>
             <a href="{{ url_for('admin.admin_feedbacks') }}" class="{% if 'feedback' in request.endpoint %}active{% endif %}">
                 <i class="fas fa-bug"></i> 纠错反馈
+                {% if feedback_pending > 0 %}
+                <span style="float:right;background:#e74c3c;color:#fff;font-size:11px;min-width:18px;height:18px;line-height:18px;text-align:center;border-radius:9px;padding:0 5px;">{{ feedback_pending }}</span>
+                {% endif %}
             </a>
             <a href="{{ url_for('admin.admin_comments') }}" class="{% if 'comments' in request.endpoint %}active{% endif %}">
                 <i class="fas fa-comments"></i> 留言管理
+                {% if comment_active > 0 %}
+                <span style="float:right;background:#3498db;color:#fff;font-size:11px;min-width:18px;height:18px;line-height:18px;text-align:center;border-radius:9px;padding:0 5px;">{{ comment_active }}</span>
+                {% endif %}
             </a>
             <a href="{{ url_for('admin.admin_notes') }}" class="{% if 'notes' in request.endpoint %}active{% endif %}">
                 <i class="fas fa-sticky-note"></i> 笔记管理
+                {% if note_count > 0 %}
+                <span style="float:right;background:var(--gray-600);color:#fff;font-size:11px;min-width:18px;height:18px;line-height:18px;text-align:center;border-radius:9px;padding:0 5px;">{{ note_count }}</span>
+                {% endif %}
             </a>
             <hr style="border-color: var(--gray-700); margin: 1rem 0;">
             <a href="{{ url_for('index') }}" target="_blank">

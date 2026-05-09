@@ -4,3 +4,4 @@ venv/
 *.pyc
 static/media/
 tools/
+ruantiku_data/

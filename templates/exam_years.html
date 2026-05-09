@@ -1,32 +1,161 @@
 {% extends 'base.html' %}
 {% block title %}历史真题 - {{ subject.name }}{% endblock %}
 {% block content %}
-<div class="mb-3">
+<div class="mb-4">
     <a href="{{ url_for('subject_detail', subject_id=subject.id) }}" class="btn btn-outline-primary btn-sm">
         <i class="fas fa-arrow-left"></i> 返回 {{ subject.name }}
     </a>
 </div>
+
 <div class="card">
-    <h2 class="card-title"><i class="fas fa-history"></i> 历史真题 - 选择年份</h2>
-    {% if years %}
-    <div class="year-grid">
-        {% for year, count in years %}
-        <a href="{{ url_for('exam_by_year', subject_id=subject.id, year=year) }}" class="year-card">
-            <div class="year-number">{{ year }}</div>
-            <div class="year-count">{{ count }} 题</div>
-        </a>
+    <h2 class="card-title"><i class="fas fa-history"></i> 历史真题 - 选择分类</h2>
+    <p class="text-muted mb-3">点击年份/批次开始练习</p>
+
+    {% if subject_total and subject_total.total > 0 %}
+    <div class="subject-progress-summary">
+        <span class="stat-badge stat-total">总题量 {{ subject_total.total }}</span>
+        <span class="stat-badge stat-studied">未学 {{ subject_total.unstudied }}</span>
+        <span class="stat-badge {{ 'stat-due' if subject_total.due > 0 else 'stat-due-empty' }}">待复习 {{ subject_total.due }}</span>
+        <span class="stat-badge stat-mastered">已掌握 {{ subject_total.mastered }}</span>
+    </div>
+    {% endif %}
+
+    {% if tree %}
+    <div class="category-tree">
+        {% for level1 in tree %}
+        <div class="category-level-1">
+            <h3>
+                <i class="fas fa-folder"></i> {{ level1.name }}
+                {% if level1._stats %}
+                <span class="l1-summary">
+                    总题量 {{ level1._stats.total }} · <span class="stat-unstudied">未学 {{ level1._stats.unstudied }}</span> · <span class="l1-due {{ 'l1-due-alert' if level1._stats.due > 0 else 'stat-due-highlight' }}">待复习 {{ level1._stats.due }}</span> · 已掌握 {{ level1._stats.mastered }}
+                </span>
+                {% endif %}
+            </h3>
+            {% if level1.children %}
+            <div class="exam-year-grid">
+                {% for level2 in level1.children %}
+                <a href="{{ url_for('study_setup', subject_id=subject.id, category_id=level2.id) }}" class="year-card">
+                    <div class="year-name">{{ level2.name }}</div>
+                    <div class="year-stats">
+                        总 {{ level2._stats.total if level2._stats else 0 }}
+                        {% if level2._stats and level2._stats.due > 0 %}
+                        · <span class="stat-due-highlight">待复 {{ level2._stats.due }}</span>
+                        {% endif %}
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
         {% endfor %}
     </div>
     {% else %}
     <div class="alert alert-info">暂无真题数据</div>
     {% endif %}
 </div>
+
 <style>
-    .year-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
-    .year-card { background-color: var(--gray-100); border-radius: var(--border-radius); padding: 1.5rem; text-align: center; text-decoration: none; color: inherit; transition: var(--transition); }
-    .year-card:hover { transform: translateY(-3px); box-shadow: var(--box-shadow); background-color: var(--primary-color); color: white; }
-    .year-number { font-size: 1.5rem; font-weight: 700; }
-    .year-count { font-size: 0.9rem; color: var(--gray-600); margin-top: 0.25rem; }
-    .year-card:hover .year-count { color: rgba(255,255,255,0.8); }
+    .category-tree { padding: 0.5rem 0; }
+    .category-level-1 { margin-bottom: 1.5rem; }
+    .category-level-1 h3 {
+        font-size: 1.15rem;
+        color: var(--primary-color);
+        margin-bottom: 0.75rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 2px solid var(--primary-color);
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.75rem;
+    }
+    .category-level-1 h3 .fa-folder { opacity: 0.7; }
+    .l1-summary { font-size: 0.82rem; color: var(--gray-500); font-weight: 400; letter-spacing: 0.02em; }
+    .l1-due { color: var(--gray-400); }
+    .l1-due-alert { color: var(--warning-color); font-weight: 600; animation: pulse-due 2s ease-in-out infinite; }
+    .stat-unstudied { color: var(--primary-color); font-weight: 600; }
+    .stat-due-highlight { color: var(--warning-color); font-weight: 600; }
+
+    /* 真题年份列表 */
+    .exam-year-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+    }
+    .year-card {
+        background: var(--gray-100);
+        border-radius: 8px;
+        padding: 0.8rem 1.2rem;
+        text-decoration: none;
+        color: inherit;
+        transition: var(--transition);
+        display: flex;
+        align-items: center;
+    }
+    .year-card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--box-shadow);
+        background: var(--primary-color);
+        color: white;
+    }
+    .year-name {
+        font-size: 0.9rem;
+        font-weight: 600;
+        flex: 1;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+    .year-stats {
+        font-size: 0.8rem;
+        color: var(--gray-500);
+        white-space: nowrap;
+        flex-shrink: 0;
+        margin-left: 1rem;
+    }
+    .year-card:hover .year-stats { color: rgba(255,255,255,0.8); }
+
+    /* 科目汇总条 */
+    .subject-progress-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        padding: 0.75rem 1rem;
+        background: linear-gradient(135deg, #f0f4ff 0%, #e8f4f3 100%);
+        border-radius: 8px;
+        margin-bottom: 1.25rem;
+        border: 1px solid rgba(67, 97, 238, 0.08);
+    }
+    .stat-badge {
+        font-size: 0.85rem;
+        padding: 0.35rem 0.75rem;
+        border-radius: 20px;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+    }
+    .stat-badge::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+    }
+    .stat-total { background: rgba(67, 97, 238, 0.1); color: var(--primary-color); }
+    .stat-total::before { background: var(--primary-color); }
+    .stat-studied { background: rgba(46, 196, 182, 0.1); color: var(--success-color); }
+    .stat-studied::before { background: var(--success-color); }
+    .stat-due { background: rgba(255, 159, 67, 0.1); color: var(--warning-color); }
+    .stat-due::before { background: var(--warning-color); }
+    .stat-due-empty { background: rgba(150, 150, 150, 0.08); color: var(--gray-500); }
+    .stat-due-empty::before { background: var(--gray-500); }
+    .stat-mastered { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+    .stat-mastered::before { background: #10b981; }
+
+    @keyframes pulse-due {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.6; }
+    }
 </style>
 {% endblock %}
